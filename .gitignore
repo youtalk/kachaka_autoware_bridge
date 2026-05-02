@@ -1,0 +1,20 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+.colcon/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.egg-info/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# pre-commit
+.pre-commit-cache/
