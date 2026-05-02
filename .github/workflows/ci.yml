@@ -27,7 +27,10 @@ jobs:
             python3-rosdep \
             python3-vcstool \
             build-essential \
-            cmake
+            cmake \
+            protobuf-compiler-grpc \
+            libgrpc++-dev \
+            libprotobuf-dev
 
       - uses: actions/checkout@v4
         with:
@@ -41,6 +44,19 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}-
             ccache-${{ runner.os }}-
+
+      - name: Generate kachaka-api proto sources
+        shell: bash
+        run: |
+          set -exo pipefail
+          out=kachaka-api/ros2/kachaka_grpc_ros2_bridge/gen-src
+          mkdir -p "$out"
+          protoc -I kachaka-api/protos \
+            --grpc_out="$out" \
+            --plugin=protoc-gen-grpc=/usr/bin/grpc_cpp_plugin \
+            --cpp_out="$out" \
+            kachaka-api/protos/*.proto
+          ls -la "$out"
 
       - name: rosdep install
         shell: bash
@@ -60,7 +76,7 @@ jobs:
           colcon build \
             --event-handlers console_direct+ \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
-            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_grpc_ros2_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
+            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
 
       - name: colcon test
         shell: bash
@@ -69,5 +85,5 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
           colcon test --event-handlers console_direct+ \
-            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_grpc_ros2_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
+            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
           colcon test-result --verbose
