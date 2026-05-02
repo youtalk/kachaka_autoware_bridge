@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="server_uri" default="192.168.1.91:26400" description="Kachaka gRPC URI"/>
+  <!--
+    The 'kachaka' namespace is currently hardcoded. The Vehicle Interface and
+    several Autoware Core launches reference Kachaka topics by absolute path
+    (/kachaka/wheel_odometry/wheel_odometry, /kachaka/manual_control/cmd_vel,
+    /kachaka/manual_control/set_enabled). Multi-robot use-cases that need a
+    different namespace would also need matching remaps in
+    kachaka_autoware_vehicle_interface — out of scope for the MVP.
+  -->
+  <arg name="frame_prefix" default=""
+       description="Prefix prepended to every TF frame_id (set when running multiple Kachakas)."/>
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname or IP. Override per robot."/>
+  <arg name="map_path" default="$(env HOME)/maps/kachaka_home"/>
+  <arg name="vehicle_info_param_file"
+       default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
+
+  <!-- Kachaka gRPC bridge -->
+  <include file="$(find-pkg-share kachaka_grpc_ros2_bridge)/launch/grpc_ros2_bridge.launch.xml">
+    <arg name="server_uri" value="$(var server_uri)"/>
+    <arg name="namespace" value="kachaka"/>
+    <arg name="frame_prefix" value="$(var frame_prefix)"/>
+  </include>
+
+  <!-- Robot description with shelf + OS-1 (frame_prefix kept consistent with
+       the gRPC bridge so TF frame_ids match across publishers). -->
+  <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py">
+    <arg name="frame_prefix" value="$(var frame_prefix)"/>
+  </include>
+
+  <!-- Ouster OS-1 sensor -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/sensor_ouster.launch.xml">
+    <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
+  </include>
+
+  <!-- Sensing (vehicle_velocity_converter etc.) -->
+  <include file="$(find-pkg-share autoware_core_sensing)/launch/autoware_core_sensing.launch.xml"/>
+
+  <!-- Localization (NDT + EKF) and Map -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/localization.launch.xml">
+    <arg name="map_path" value="$(var map_path)"/>
+  </include>
+
+  <!-- Planning -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/planning.launch.xml">
+    <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+  </include>
+
+  <!-- Control -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/control.launch.xml">
+    <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+  </include>
+
+  <!-- Vehicle Interface (Control to Twist + operation_mode + VelocityReport) -->
+  <include file="$(find-pkg-share kachaka_autoware_vehicle_interface)/launch/vehicle_interface.launch.xml"/>
+
+  <!-- AD-API -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/api.launch.xml"/>
+</launch>

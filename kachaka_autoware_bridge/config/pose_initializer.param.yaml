@@ -1,0 +1,41 @@
+/**:
+  ros__parameters:
+    user_defined_initial_pose:
+      enable: false
+      # [x, y, z, qx, qy, qz, qw] - identity quaternion so flipping `enable`
+      # later yields a valid orientation by default.
+      pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+    gnss_pose_timeout: 3.0
+    stop_check_duration: 3.0
+    pose_error_threshold: 5.0
+    pose_error_check_enabled: false
+    ekf_enabled: true
+    gnss_enabled: false
+    yabloc_enabled: false
+    ndt_enabled: true
+    stop_check_enabled: true
+
+    map_height_fitter:
+      map_loader_name: "/map/pointcloud_map_loader"
+      target: "pointcloud_map"
+
+    gnss_particle_covariance:
+      [
+        1.0, 0.0, 0.0,  0.0,  0.0,  0.0,
+        0.0, 1.0, 0.0,  0.0,  0.0,  0.0,
+        0.0, 0.0, 0.01, 0.0,  0.0,  0.0,
+        0.0, 0.0, 0.0,  0.01, 0.0,  0.0,
+        0.0, 0.0, 0.0,  0.0,  0.01, 0.0,
+        0.0, 0.0, 0.0,  0.0,  0.0,  10.0,
+      ]
+
+    output_pose_covariance:
+      [
+        1.0, 0.0, 0.0,  0.0,  0.0,  0.0,
+        0.0, 1.0, 0.0,  0.0,  0.0,  0.0,
+        0.0, 0.0, 0.01, 0.0,  0.0,  0.0,
+        0.0, 0.0, 0.0,  0.01, 0.0,  0.0,
+        0.0, 0.0, 0.0,  0.0,  0.01, 0.0,
+        0.0, 0.0, 0.0,  0.0,  0.0,  0.2,
+      ]

@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="vehicle_info_param_file"
+       default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
+
+  <include file="$(find-pkg-share autoware_core_control)/launch/autoware_core_control.launch.xml">
+    <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+  </include>
+</launch>

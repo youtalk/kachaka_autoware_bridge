@@ -3,7 +3,7 @@
 <package format="3">
   <name>kachaka_autoware_bridge</name>
   <version>0.0.0</version>
-  <description>Launch wrappers connecting Kachaka sensors to Autoware Core. Currently provides the Ouster OS-1 driver wrapper that publishes onto Autoware-expected topics; additional launches (localization, planning, control, integrated bringup) land in subsequent PRs.</description>
+  <description>Top-level launch and integration glue connecting the Kachaka gRPC ROS 2 bridge to Autoware Core (Ouster sensor wrapper, localization / planning / control / AD-API launches, and the integrated bringup).</description>
   <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
   <license>Apache License 2.0</license>
   <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
@@ -13,7 +13,22 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
   <exec_depend>topic_tools</exec_depend>
+
+  <exec_depend>kachaka_grpc_ros2_bridge</exec_depend>
+  <exec_depend>kachaka_autoware_description</exec_depend>
+  <exec_depend>kachaka_autoware_maps</exec_depend>
+  <exec_depend>kachaka_autoware_vehicle_interface</exec_depend>
+
   <exec_depend>ouster_ros</exec_depend>
+
+  <exec_depend>autoware_core_api</exec_depend>
+  <exec_depend>autoware_core_control</exec_depend>
+  <exec_depend>autoware_core_localization</exec_depend>
+  <exec_depend>autoware_core_map</exec_depend>
+  <exec_depend>autoware_core_planning</exec_depend>
+  <exec_depend>autoware_core_sensing</exec_depend>
+  <exec_depend>autoware_default_adapi</exec_depend>
+  <exec_depend>autoware_adapi_adaptors</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

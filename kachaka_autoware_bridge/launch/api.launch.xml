@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<launch>
+  <include file="$(find-pkg-share autoware_core_api)/launch/autoware_core_api.launch.xml">
+    <arg name="launch_default_adapi" value="true"/>
+    <arg name="launch_rviz_adaptors" value="true"/>
+  </include>
+</launch>

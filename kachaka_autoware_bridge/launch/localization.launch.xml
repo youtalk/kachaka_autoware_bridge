@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="map_path" default="$(env HOME)/maps/kachaka_home"
+       description="Directory holding pointcloud_map.pcd, lanelet2_map.osm, etc."/>
+
+  <include file="$(find-pkg-share autoware_core_map)/launch/autoware_core_map.launch.xml">
+    <arg name="lanelet2_map_path" value="$(var map_path)/lanelet2_map.osm"/>
+    <arg name="map_projector_info_path" value="$(var map_path)/map_projector_info.yaml"/>
+    <arg name="pointcloud_map_path" value="$(var map_path)/pointcloud_map.pcd"/>
+    <arg name="pointcloud_map_metadata_path" value="$(var map_path)/pointcloud_map/metadata.yaml"/>
+  </include>
+
+  <include file="$(find-pkg-share autoware_core_localization)/launch/autoware_core_localization.launch.xml">
+    <arg name="pose_initializer_param_path"
+         value="$(find-pkg-share kachaka_autoware_bridge)/config/pose_initializer.param.yaml"/>
+    <arg name="lidar_input_topic" value="/sensing/lidar/top/pointcloud_raw_ex"/>
+  </include>
+</launch>
