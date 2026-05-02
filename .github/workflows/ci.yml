@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy-ros-base
+      options: --user root
+
+    steps:
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ccache \
+            git \
+            python3-colcon-common-extensions \
+            python3-rosdep \
+            python3-vcstool \
+            build-essential \
+            cmake
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}-
+            ccache-${{ runner.os }}-
+
+      - name: rosdep install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rosdep update --rosdistro jazzy
+          rosdep install --from-paths . --ignore-src --rosdistro jazzy -y \
+            --skip-keys "autoware_core autoware_default_adapi autoware_adapi_adaptors autoware_rviz_plugins"
+
+      - name: colcon build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source /opt/ros/jazzy/setup.bash
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          colcon build \
+            --event-handlers console_direct+ \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            --packages-skip-regex "kachaka_autoware_bridge"
+
+      - name: colcon test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --event-handlers console_direct+ \
+            --packages-skip-regex "kachaka_autoware_bridge"
+          colcon test-result --verbose
