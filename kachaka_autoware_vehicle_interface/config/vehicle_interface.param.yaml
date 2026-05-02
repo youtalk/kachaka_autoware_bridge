@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    wheel_base: 0.30
+    max_linear_velocity: 0.3
+    max_angular_velocity: 1.57
+    cmd_vel_timeout: 0.5
+    publish_period_velocity_status: 0.02
+    publish_period_operation_mode: 0.1
+    auto_enable_manual_control: true

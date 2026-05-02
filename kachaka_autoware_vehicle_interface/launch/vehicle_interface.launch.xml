@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config_file"
+       default="$(find-pkg-share kachaka_autoware_vehicle_interface)/config/vehicle_interface.param.yaml"/>
+
+  <node pkg="kachaka_autoware_vehicle_interface"
+        exec="kachaka_autoware_vehicle_interface_node"
+        name="kachaka_autoware_vehicle_interface"
+        output="screen">
+    <param from="$(var config_file)"/>
+  </node>
+</launch>

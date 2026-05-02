@@ -3,17 +3,21 @@
 <package format="3">
   <name>kachaka_autoware_vehicle_interface</name>
   <version>0.0.0</version>
-  <description>Pure-logic libraries used by the Kachaka Autoware vehicle interface: Ackermann-to-differential-drive twist conversion, operation-mode state machine, and odometry-to-VelocityReport conversion. The rclcpp Node that wires these into ROS I/O is added by a follow-up PR.</description>
+  <description>Vehicle Interface bridging Autoware Core control output to Kachaka manual_control/cmd_vel, with operation_mode state machine and velocity_status republishing.</description>
   <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
   <license>Apache License 2.0</license>
   <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
+  <depend>autoware_adapi_v1_msgs</depend>
   <depend>autoware_control_msgs</depend>
   <depend>autoware_vehicle_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>std_srvs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>

@@ -17,7 +17,13 @@ ament_auto_add_library(${PROJECT_NAME} SHARED
   src/control_to_twist_converter.cpp
   src/operation_mode_state_machine.cpp
   src/velocity_status_publisher.cpp
+  src/vehicle_interface_node.cpp
 )
+
+ament_auto_add_executable(${PROJECT_NAME}_node
+  src/main.cpp
+)
+target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -38,6 +44,12 @@ if(BUILD_TESTING)
     test/test_velocity_status_publisher.cpp
   )
   target_link_libraries(test_velocity_status_publisher ${PROJECT_NAME})
+
+  ament_add_gtest(test_vehicle_interface_node
+    test/test_vehicle_interface_node.cpp
+    TIMEOUT 30
+  )
+  target_link_libraries(test_vehicle_interface_node ${PROJECT_NAME})
 endif()
 
-ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)
+ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR INSTALL_TO_SHARE launch config)
