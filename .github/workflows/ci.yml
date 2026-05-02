@@ -84,6 +84,8 @@ jobs:
           set -exo pipefail
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
+          # Only test our packages — kachaka-api submodule packages have upstream lint
+          # quirks and use auto-generated code that trips ament_lint.
           colcon test --event-handlers console_direct+ \
-            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
+            --packages-select-regex "^kachaka_autoware_(description|maps|vehicle_interface)$"
           colcon test-result --verbose
