@@ -25,9 +25,7 @@ ament_auto_add_executable(${PROJECT_NAME}_node src/main.cpp)
 target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME})
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_lint_auto_find_test_dependencies()
 
   ament_add_gtest(test_control_to_twist_converter
                   test/test_control_to_twist_converter.cpp)
