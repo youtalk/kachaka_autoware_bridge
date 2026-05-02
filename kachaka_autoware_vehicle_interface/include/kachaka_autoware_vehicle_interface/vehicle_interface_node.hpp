@@ -17,41 +17,43 @@
 
 #include <memory>
 
-#include <rclcpp/rclcpp.hpp>
-
 #include <autoware_adapi_v1_msgs/msg/operation_mode_state.hpp>
 #include <autoware_adapi_v1_msgs/srv/change_operation_mode.hpp>
 #include <autoware_control_msgs/msg/control.hpp>
 #include <autoware_vehicle_msgs/msg/velocity_report.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
 #include "kachaka_autoware_vehicle_interface/control_to_twist_converter.hpp"
 #include "kachaka_autoware_vehicle_interface/operation_mode_state_machine.hpp"
 #include "kachaka_autoware_vehicle_interface/velocity_status_publisher.hpp"
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
-class VehicleInterfaceNode : public rclcpp::Node
-{
-public:
-  explicit VehicleInterfaceNode(const rclcpp::NodeOptions & options);
+class VehicleInterfaceNode : public rclcpp::Node {
+ public:
+  explicit VehicleInterfaceNode(const rclcpp::NodeOptions& options);
 
-private:
+ private:
   std::unique_ptr<ControlToTwistConverter> converter_;
   OperationModeStateMachine state_machine_;
 
-  rclcpp::Subscription<autoware_control_msgs::msg::Control>::SharedPtr control_sub_;
+  rclcpp::Subscription<autoware_control_msgs::msg::Control>::SharedPtr
+      control_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr twist_pub_;
-  rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr velocity_status_pub_;
-  rclcpp::Publisher<autoware_adapi_v1_msgs::msg::OperationModeState>::SharedPtr op_mode_pub_;
+  rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr
+      velocity_status_pub_;
+  rclcpp::Publisher<autoware_adapi_v1_msgs::msg::OperationModeState>::SharedPtr
+      op_mode_pub_;
   rclcpp::Service<autoware_adapi_v1_msgs::srv::ChangeOperationMode>::SharedPtr
-    change_to_autonomous_srv_;
-  rclcpp::Service<autoware_adapi_v1_msgs::srv::ChangeOperationMode>::SharedPtr change_to_stop_srv_;
-  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr enable_manual_control_client_;
+      change_to_autonomous_srv_;
+  rclcpp::Service<autoware_adapi_v1_msgs::srv::ChangeOperationMode>::SharedPtr
+      change_to_stop_srv_;
+  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr
+      enable_manual_control_client_;
 
   rclcpp::TimerBase::SharedPtr velocity_status_timer_;
   rclcpp::TimerBase::SharedPtr op_mode_timer_;
@@ -69,11 +71,15 @@ private:
   void on_op_mode_timer();
   void on_cmd_vel_timeout_timer();
   void on_change_to_autonomous(
-    const autoware_adapi_v1_msgs::srv::ChangeOperationMode::Request::SharedPtr req,
-    autoware_adapi_v1_msgs::srv::ChangeOperationMode::Response::SharedPtr resp);
+      const autoware_adapi_v1_msgs::srv::ChangeOperationMode::Request::SharedPtr
+          req,
+      autoware_adapi_v1_msgs::srv::ChangeOperationMode::Response::SharedPtr
+          resp);
   void on_change_to_stop(
-    const autoware_adapi_v1_msgs::srv::ChangeOperationMode::Request::SharedPtr req,
-    autoware_adapi_v1_msgs::srv::ChangeOperationMode::Response::SharedPtr resp);
+      const autoware_adapi_v1_msgs::srv::ChangeOperationMode::Request::SharedPtr
+          req,
+      autoware_adapi_v1_msgs::srv::ChangeOperationMode::Response::SharedPtr
+          resp);
 
   void enable_manual_control(bool enable);
 };

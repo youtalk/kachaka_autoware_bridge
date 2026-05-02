@@ -14,27 +14,23 @@
 
 #include "kachaka_autoware_vehicle_interface/operation_mode_state_machine.hpp"
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
 OperationModeStateMachine::OperationModeStateMachine()
-: state_(OperationMode::STOP) {}
+    : state_(OperationMode::STOP) {}
 
-OperationMode OperationModeStateMachine::get_state() const
-{
+OperationMode OperationModeStateMachine::get_state() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return state_;
 }
 
-bool OperationModeStateMachine::request_autonomous()
-{
+bool OperationModeStateMachine::request_autonomous() {
   std::lock_guard<std::mutex> lock(mutex_);
   state_ = OperationMode::AUTONOMOUS;
   return true;
 }
 
-bool OperationModeStateMachine::request_stop()
-{
+bool OperationModeStateMachine::request_stop() {
   std::lock_guard<std::mutex> lock(mutex_);
   state_ = OperationMode::STOP;
   return true;

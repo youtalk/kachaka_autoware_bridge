@@ -18,24 +18,22 @@
 #include <autoware_control_msgs/msg/control.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
-struct ControlToTwistParams
-{
+struct ControlToTwistParams {
   double wheel_base;
   double max_linear_velocity;
   double max_angular_velocity;
 };
 
-class ControlToTwistConverter
-{
-public:
-  explicit ControlToTwistConverter(const ControlToTwistParams & params);
+class ControlToTwistConverter {
+ public:
+  explicit ControlToTwistConverter(const ControlToTwistParams& params);
 
-  geometry_msgs::msg::Twist convert(const autoware_control_msgs::msg::Control & control) const;
+  geometry_msgs::msg::Twist convert(
+      const autoware_control_msgs::msg::Control& control) const;
 
-private:
+ private:
   ControlToTwistParams params_;
 };
 

@@ -14,12 +14,10 @@
 
 #include "kachaka_autoware_vehicle_interface/velocity_status_publisher.hpp"
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
 autoware_vehicle_msgs::msg::VelocityReport convert_odometry_to_velocity_report(
-  const nav_msgs::msg::Odometry & odom)
-{
+    const nav_msgs::msg::Odometry& odom) {
   autoware_vehicle_msgs::msg::VelocityReport report;
   // VelocityReport carries body-frame velocities, so the frame_id must match
   // the frame Odometry's twist is expressed in (child_frame_id, e.g.

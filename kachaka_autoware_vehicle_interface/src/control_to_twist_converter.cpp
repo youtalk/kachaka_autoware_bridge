@@ -17,15 +17,14 @@
 #include <algorithm>
 #include <cmath>
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
-ControlToTwistConverter::ControlToTwistConverter(const ControlToTwistParams & params)
-: params_(params) {}
+ControlToTwistConverter::ControlToTwistConverter(
+    const ControlToTwistParams& params)
+    : params_(params) {}
 
 geometry_msgs::msg::Twist ControlToTwistConverter::convert(
-  const autoware_control_msgs::msg::Control & control) const
-{
+    const autoware_control_msgs::msg::Control& control) const {
   const double v = static_cast<double>(control.longitudinal.velocity);
   const double delta = static_cast<double>(control.lateral.steering_tire_angle);
 
@@ -36,14 +35,15 @@ geometry_msgs::msg::Twist ControlToTwistConverter::convert(
   // max_linear_velocity but the resulting omega still lies within its own
   // saturation limit.
   const double v_clamped =
-    std::clamp(v, -params_.max_linear_velocity, params_.max_linear_velocity);
-  const double omega = (params_.wheel_base > 0.0) ?
-    v_clamped * std::tan(delta) / params_.wheel_base :
-    0.0;
+      std::clamp(v, -params_.max_linear_velocity, params_.max_linear_velocity);
+  const double omega = (params_.wheel_base > 0.0)
+                           ? v_clamped * std::tan(delta) / params_.wheel_base
+                           : 0.0;
 
   geometry_msgs::msg::Twist twist;
   twist.linear.x = v_clamped;
-  twist.angular.z = std::clamp(omega, -params_.max_angular_velocity, params_.max_angular_velocity);
+  twist.angular.z = std::clamp(omega, -params_.max_angular_velocity,
+                               params_.max_angular_velocity);
   return twist;
 }
 

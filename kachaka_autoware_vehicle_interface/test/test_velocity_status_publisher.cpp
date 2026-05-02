@@ -13,15 +13,13 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
-
 #include <nav_msgs/msg/odometry.hpp>
 
 #include "kachaka_autoware_vehicle_interface/velocity_status_publisher.hpp"
 
 using kachaka_autoware_vehicle_interface::convert_odometry_to_velocity_report;
 
-TEST(VelocityStatusPublisher, ConvertsLinearAndAngularComponents)
-{
+TEST(VelocityStatusPublisher, ConvertsLinearAndAngularComponents) {
   nav_msgs::msg::Odometry odom;
   odom.header.stamp.sec = 42;
   odom.header.stamp.nanosec = 123;
@@ -41,8 +39,7 @@ TEST(VelocityStatusPublisher, ConvertsLinearAndAngularComponents)
   EXPECT_FLOAT_EQ(report.heading_rate, -0.5f);
 }
 
-TEST(VelocityStatusPublisher, FrameIdComesFromChildFrameNotPoseFrame)
-{
+TEST(VelocityStatusPublisher, FrameIdComesFromChildFrameNotPoseFrame) {
   // Regression guard: nav_msgs/Odometry.twist is defined in child_frame_id.
   // Using header.frame_id here would mis-label body-frame velocities as the
   // world frame whenever the source odometry is in odom/map.
@@ -54,8 +51,7 @@ TEST(VelocityStatusPublisher, FrameIdComesFromChildFrameNotPoseFrame)
   EXPECT_EQ(report.header.frame_id, "base_link");
 }
 
-TEST(VelocityStatusPublisher, IgnoresLateralLinearVelocity)
-{
+TEST(VelocityStatusPublisher, IgnoresLateralLinearVelocity) {
   // Even if the source odometry carries a non-zero linear.y (which would be
   // physically meaningless for a differential-drive base), the converter must
   // emit lateral_velocity = 0.
@@ -69,8 +65,7 @@ TEST(VelocityStatusPublisher, IgnoresLateralLinearVelocity)
   EXPECT_FLOAT_EQ(report.lateral_velocity, 0.0f);
 }
 
-TEST(VelocityStatusPublisher, ZeroOdometryYieldsZeroReport)
-{
+TEST(VelocityStatusPublisher, ZeroOdometryYieldsZeroReport) {
   nav_msgs::msg::Odometry odom;
   const auto report = convert_odometry_to_velocity_report(odom);
   EXPECT_FLOAT_EQ(report.longitudinal_velocity, 0.0f);

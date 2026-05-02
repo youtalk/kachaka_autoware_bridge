@@ -17,18 +17,15 @@
 
 #include <mutex>
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
-enum class OperationMode
-{
+enum class OperationMode {
   STOP,
   AUTONOMOUS,
 };
 
-class OperationModeStateMachine
-{
-public:
+class OperationModeStateMachine {
+ public:
   OperationModeStateMachine();
 
   OperationMode get_state() const;
@@ -36,7 +33,7 @@ public:
   bool request_autonomous();
   bool request_stop();
 
-private:
+ private:
   mutable std::mutex mutex_;
   OperationMode state_;
 };

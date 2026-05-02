@@ -12,23 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-
 #include <cmath>
 
 #include <autoware_control_msgs/msg/control.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <gtest/gtest.h>
 
 #include "kachaka_autoware_vehicle_interface/control_to_twist_converter.hpp"
 
 using kachaka_autoware_vehicle_interface::ControlToTwistConverter;
 using kachaka_autoware_vehicle_interface::ControlToTwistParams;
 
-namespace
-{
+namespace {
 
-ControlToTwistParams make_default_params()
-{
+ControlToTwistParams make_default_params() {
   ControlToTwistParams p;
   p.wheel_base = 0.30;
   p.max_linear_velocity = 0.3;
@@ -36,8 +33,7 @@ ControlToTwistParams make_default_params()
   return p;
 }
 
-autoware_control_msgs::msg::Control make_control(double v, double delta)
-{
+autoware_control_msgs::msg::Control make_control(double v, double delta) {
   autoware_control_msgs::msg::Control c;
   c.longitudinal.velocity = static_cast<float>(v);
   c.lateral.steering_tire_angle = static_cast<float>(delta);
@@ -46,16 +42,15 @@ autoware_control_msgs::msg::Control make_control(double v, double delta)
 
 }  // namespace
 
-TEST(ControlToTwistConverter, StraightLineHasZeroAngular)
-{
+TEST(ControlToTwistConverter, StraightLineHasZeroAngular) {
   ControlToTwistConverter converter(make_default_params());
   const auto twist = converter.convert(make_control(0.2, 0.0));
-  EXPECT_DOUBLE_EQ(twist.linear.x, static_cast<double>(static_cast<float>(0.2)));
+  EXPECT_DOUBLE_EQ(twist.linear.x,
+                   static_cast<double>(static_cast<float>(0.2)));
   EXPECT_DOUBLE_EQ(twist.angular.z, 0.0);
 }
 
-TEST(ControlToTwistConverter, RightTurnHasNegativeAngular)
-{
+TEST(ControlToTwistConverter, RightTurnHasNegativeAngular) {
   // delta = -0.3 rad (right turn), v = 0.2 m/s, wheel_base = 0.30
   // omega = 0.2 * tan(-0.3) / 0.30
   ControlToTwistConverter converter(make_default_params());
@@ -67,30 +62,26 @@ TEST(ControlToTwistConverter, RightTurnHasNegativeAngular)
   EXPECT_LT(twist.angular.z, 0.0);
 }
 
-TEST(ControlToTwistConverter, ClampLinearVelocityToMax)
-{
+TEST(ControlToTwistConverter, ClampLinearVelocityToMax) {
   ControlToTwistConverter converter(make_default_params());
   const auto twist = converter.convert(make_control(1.0, 0.0));
   EXPECT_NEAR(twist.linear.x, 0.3, 1e-9);
 }
 
-TEST(ControlToTwistConverter, ClampAngularVelocityToMax)
-{
+TEST(ControlToTwistConverter, ClampAngularVelocityToMax) {
   ControlToTwistConverter converter(make_default_params());
   // Large delta yields a huge omega; clamped to max_angular_velocity.
   const auto twist = converter.convert(make_control(0.3, 1.5));
   EXPECT_NEAR(twist.angular.z, 1.57, 1e-6);
 }
 
-TEST(ControlToTwistConverter, NegativeLinearVelocityClampsAtNegativeMax)
-{
+TEST(ControlToTwistConverter, NegativeLinearVelocityClampsAtNegativeMax) {
   ControlToTwistConverter converter(make_default_params());
   const auto twist = converter.convert(make_control(-1.0, 0.0));
   EXPECT_NEAR(twist.linear.x, -0.3, 1e-9);
 }
 
-TEST(ControlToTwistConverter, ZeroWheelBaseGivesZeroAngular)
-{
+TEST(ControlToTwistConverter, ZeroWheelBaseGivesZeroAngular) {
   // Defensive: wheel_base = 0 must not divide by zero.
   ControlToTwistParams p;
   p.wheel_base = 0.0;
@@ -101,21 +92,19 @@ TEST(ControlToTwistConverter, ZeroWheelBaseGivesZeroAngular)
   EXPECT_DOUBLE_EQ(twist.angular.z, 0.0);
 }
 
-TEST(ControlToTwistConverter, ZeroVelocityZeroSteerYieldsZeroTwist)
-{
+TEST(ControlToTwistConverter, ZeroVelocityZeroSteerYieldsZeroTwist) {
   ControlToTwistConverter converter(make_default_params());
   const auto twist = converter.convert(make_control(0.0, 0.0));
   EXPECT_DOUBLE_EQ(twist.linear.x, 0.0);
   EXPECT_DOUBLE_EQ(twist.angular.z, 0.0);
 }
 
-TEST(ControlToTwistConverter, LinearSaturationPreservesCurvature)
-{
+TEST(ControlToTwistConverter, LinearSaturationPreservesCurvature) {
   // Requested v = 1.0 m/s gets clamped to 0.3, but the steering angle is
   // small enough that omega remains well within saturation. The resulting
   // (v_clamped, omega) pair must still describe the same curvature
-  // tan(delta)/L the controller asked for; i.e. omega = v_clamped * tan(delta) / L,
-  // not v_unclamped * tan(delta) / L. Computing omega from the unclamped v
+  // tan(delta)/L the controller asked for; i.e. omega = v_clamped * tan(delta)
+  // / L, not v_unclamped * tan(delta) / L. Computing omega from the unclamped v
   // (the previous behavior) would over-rotate by the saturation ratio
   // 1.0/0.3 ≈ 3.3x.
   ControlToTwistConverter converter(make_default_params());

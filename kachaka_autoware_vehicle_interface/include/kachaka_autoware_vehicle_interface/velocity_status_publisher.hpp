@@ -18,11 +18,10 @@
 #include <autoware_vehicle_msgs/msg/velocity_report.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 
-namespace kachaka_autoware_vehicle_interface
-{
+namespace kachaka_autoware_vehicle_interface {
 
 autoware_vehicle_msgs::msg::VelocityReport convert_odometry_to_velocity_report(
-  const nav_msgs::msg::Odometry & odom);
+    const nav_msgs::msg::Odometry& odom);
 
 }  // namespace kachaka_autoware_vehicle_interface
 
