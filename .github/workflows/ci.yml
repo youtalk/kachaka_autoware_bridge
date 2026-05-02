@@ -48,7 +48,7 @@ jobs:
           set -euxo pipefail
           rosdep update --rosdistro jazzy
           rosdep install --from-paths . --ignore-src --rosdistro jazzy -y \
-            --skip-keys "autoware_core autoware_default_adapi autoware_adapi_adaptors autoware_rviz_plugins"
+            --skip-keys "autoware_core_api autoware_core_control autoware_core_localization autoware_core_map autoware_core_planning autoware_core_sensing autoware_default_adapi autoware_adapi_adaptors autoware_rviz_plugins"
 
       - name: colcon build
         shell: bash
