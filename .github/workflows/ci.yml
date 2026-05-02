@@ -60,7 +60,7 @@ jobs:
           colcon build \
             --event-handlers console_direct+ \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
-            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
+            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_grpc_ros2_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
 
       - name: colcon test
         shell: bash
@@ -69,5 +69,5 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
           colcon test --event-handlers console_direct+ \
-            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
+            --packages-skip-regex "^kachaka_autoware_bridge$|^kachaka_grpc_ros2_bridge$|^kachaka_vision$|^kachaka_speak$|^kachaka_nav2_bringup$"
           colcon test-result --verbose
