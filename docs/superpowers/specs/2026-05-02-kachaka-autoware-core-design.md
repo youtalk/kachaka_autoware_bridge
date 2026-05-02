@@ -1,197 +1,198 @@
-# Kachaka × Autoware Core 統合設計
+# Kachaka × Autoware Core Integration Design
 
-- 作成日: 2026-05-02
-- ステータス: ドラフト（実装計画前のレビュー段階）
-- 関連: [autoware_core](https://github.com/autowarefoundation/autoware_core), [kachaka-api](https://github.com/pf-robotics/kachaka-api), [autoware_rviz_plugins](https://github.com/autowarefoundation/autoware_rviz_plugins)
+- Created: 2026-05-02
+- Status: Draft (review stage, before implementation planning)
+- Related: [autoware_core](https://github.com/autowarefoundation/autoware_core), [kachaka-api](https://github.com/pf-robotics/kachaka-api), [autoware_rviz_plugins](https://github.com/autowarefoundation/autoware_rviz_plugins)
 
-## 1. 目的
+## 1. Purpose
 
-Kachaka を Autoware Core のパッケージで自律移動させる。Kachakaが既に持っている内蔵 navigation を経由せず、Autoware の localization・planning・control がそのまま動くロボットとして扱えるようにすることで、Autoware エコシステムの資産（lanelet2 / NDT / mission_planner / pure_pursuit / AD-API / autoware_rviz_plugins）を Kachaka に持ち込む。
+Drive Kachaka autonomously using Autoware Core packages. Instead of routing through Kachaka's built-in navigation, treat Kachaka as a robot on which Autoware's localization, planning, and control run directly. This brings the Autoware ecosystem assets (lanelet2 / NDT / mission_planner / pure_pursuit / AD-API / autoware_rviz_plugins) onto Kachaka.
 
-## 2. スコープ
+## 2. Scope
 
-### 2.1 In Scope（MVP）
+### 2.1 In Scope (MVP)
 
-「**RViz の Autoware 標準UI で 2D Goal Pose を 1 点指定すると、Kachaka が Autoware の planning と control を経由して目標位置に到達する**」までを MVP とする。具体的には:
+The MVP is defined as: **specifying a single 2D Goal Pose from the standard Autoware RViz UI causes Kachaka to reach that target through Autoware's planning and control.** Concretely:
 
-- Localization: Autoware NDT + EKF を Ouster OS-1 128 で動作
-- Planning: lanelet2 vector_map を前提に `autoware_core_planning` をフル動作
-- Control: `autoware_simple_pure_pursuit` の出力を Kachakaの差動駆動 Twist に変換
-- AD-API: `autoware_default_adapi` + `autoware_adapi_adaptors` + `autoware_rviz_plugins` を採用
-- Vehicle Interface: 独立した新規パッケージとして実装し、将来的な完全 Autoware vehicle_interface 準拠への発展余地を残す
+- Localization: Autoware NDT + EKF running on the Ouster OS-1 128
+- Planning: full `autoware_core_planning` operation, assuming a lanelet2 vector_map
+- Control: convert `autoware_simple_pure_pursuit` output into a differential-drive Twist for Kachaka
+- AD-API: adopt `autoware_default_adapi` + `autoware_adapi_adaptors` + `autoware_rviz_plugins`
+- Vehicle Interface: implemented as a new standalone package, leaving room to evolve toward a fully Autoware-compliant vehicle_interface in the future
 
-### 2.2 Out of Scope（MVP外、後続フェーズ）
+### 2.2 Out of Scope (post-MVP phases)
 
-- 動的物体検出（perception スタック）
-- 巡回 / 複数 waypoint
-- 障害物停止（`motion_velocity_planner::ObstacleStopModule` の有効化は MVP では off）
-- Kachaka の dock/undock シーケンスとの連携
-- Kachaka の内蔵 navigation の完全置換（kachaka_command 系）
-- マルチKachaka（`frame_prefix` の使用）
+- Dynamic object detection (perception stack)
+- Patrol / multi-waypoint navigation
+- Obstacle stopping (`motion_velocity_planner::ObstacleStopModule` is off in the MVP)
+- Integration with Kachaka's dock/undock sequence
+- Full replacement of Kachaka's built-in navigation (the `kachaka_command` family)
+- Multi-Kachaka operation (use of `frame_prefix`)
 
-## 3. 前提と制約
+## 3. Assumptions and Constraints
 
-### 3.1 物理構成
+### 3.1 Physical Configuration
 
-- **「Autoware シェルフ」**を 1 つ用意し、その上に **Jetson Thor** と **Ouster OS-1 128** を固定する。
-- このシェルフは Kachaka に **常時搭載されている運用前提**（MVPではドッキング遷移を扱わない）。
-- Kachaka 本体は IP 192.168.1.91 で gRPC API（port 26400）を提供。
-- Thor 上で Autoware 一式と `kachaka_grpc_ros2_bridge` を動かす。
-- 開発 PC 上で RViz2 + autoware_rviz_plugins を動かし、Thor と同じ ROS_DOMAIN_ID で通信。
-- **Kachakaの 2D LiDAR は故障しているため使用しない**。Kachaka 内蔵の地図作成・自己位置推定は当てにせず、Autoware NDT が唯一の自己位置推定手段。Kachaka の `/scan` トピックも購読しない。
+- A dedicated **"Autoware shelf"** is prepared, with a **Jetson Thor** and an **Ouster OS-1 128** mounted on top.
+- This shelf is **permanently carried by Kachaka** during operation (the MVP does not handle docking transitions).
+- The Kachaka body exposes its gRPC API on IP 192.168.1.91 (port 26400).
+- Thor runs the full Autoware stack and `kachaka_grpc_ros2_bridge`.
+- A development PC runs RViz2 + autoware_rviz_plugins, communicating with Thor over the same ROS_DOMAIN_ID.
+- **Kachaka's 2D LiDAR is not used in this stack.** Kachaka's built-in mapping and localization are not relied upon; Autoware NDT is the sole source of localization. The Kachaka `/scan` topic is also not subscribed to.
 
-### 3.2 ソフトウェア前提
+### 3.2 Software Assumptions
 
-- ROS 2 Jazzy（Thor / 開発PC）
+- ROS 2 Jazzy (on Thor and on the development PC)
 - ROS_DOMAIN_ID = 123
-- Autoware Core ワークスペース: `~/ros/jazzy`
-- Kachaka SW バージョン: `kachaka-api` 3.16 以降
-- GNSS は使えない（屋内）
-- 屋内のため `pose_initializer` の `gnss_enabled: false`、`yabloc_enabled: false`
+- Autoware Core workspace: `~/ros/jazzy`
+- Kachaka SW version: `kachaka-api` 3.16 or later
+- GNSS is unavailable (indoor)
+- Indoor operation: `pose_initializer` runs with `gnss_enabled: false` and `yabloc_enabled: false`
 
-### 3.3 事前作業
+### 3.3 Prerequisite Work
 
-MVP に入る前に以下が完了している必要がある（M0 マイルストーン）:
+The following must be completed before entering the MVP (milestone M0):
 
-1. **pointcloud_map の作成**: **OS-1 128 単独で**自宅をマッピング（lio_sam, fast_lio, glim 等）し、`pointcloud_map.pcd` + `pointcloud_map/metadata.yaml` を生成する。Kachaka の 2D LiDAR は故障しているため補助に使えない。マッピング時は Kachaka を手押し or テレオペで動かすか、別途 OS-1 を手で持って歩く。
-2. **lanelet2 vector_map の作成**: TIER IV の Vector Map Builder で自宅の通行可能領域に最小限のレーンを引き、`lanelet2_map.osm` + `map_projector_info.yaml` を生成する。**pointcloud_map と lanelet2 vector_map は同一の local projection 原点で生成**する（座標系の整合は §4.3 を参照）。
-3. **Ouster OS-1 のシェルフへの物理固定** とキャリブレーション値（base_footprint → os1_sensor の static transform）の取得。
+1. **Build the pointcloud_map.** Map the home environment using **only the OS-1 128** (lio_sam, fast_lio, glim, etc.) and produce `pointcloud_map.pcd` + `pointcloud_map/metadata.yaml`. Kachaka's 2D LiDAR cannot assist here. During mapping, push or teleop Kachaka, or carry the OS-1 by hand.
+2. **Build the lanelet2 vector_map.** Use TIER IV's Vector Map Builder to draw a minimal set of lanes over the home's traversable area, producing `lanelet2_map.osm` + `map_projector_info.yaml`. **The pointcloud_map and the lanelet2 vector_map must be generated with the same local projection origin** (see §4.3 for coordinate-frame consistency).
+3. **Physically mount the Ouster OS-1 on the shelf** and obtain calibration values (the static transform from `base_footprint` to `os1_sensor`).
 
-### 3.4 設計判断（合意済み）
+### 3.4 Design Decisions (agreed)
 
-| 項目 | 選択 | 備考 |
+| Item | Choice | Notes |
 |---|---|---|
-| スコープ | フル Autoware（C） | localization 含む |
-| MVP | 1 点指定移動（B） | RViz 1 操作で Kachaka 到達 |
-| マップ | lanelet2 手動作成（A） | Vector Map Builder |
-| Vehicle Interface | 独立ノード（B、将来 C 拡張） | Operation Mode 状態機械含む |
-| 初期姿勢 | NDT monte carlo（D） | + autoware_rviz_plugins |
-| AD-API | フル導入（A） | default_adapi + adaptors + rviz_plugins |
+| Scope | Full Autoware (C) | Includes localization |
+| MVP | Single-point goal (B) | One RViz operation gets Kachaka to the goal |
+| Map | Manual lanelet2 (A) | Vector Map Builder |
+| Vehicle Interface | Standalone node (B, expandable to C) | Includes Operation Mode state machine |
+| Initial pose | NDT monte carlo (D) | + autoware_rviz_plugins |
+| AD-API | Full adoption (A) | default_adapi + adaptors + rviz_plugins |
 
-## 4. システム構成
+## 4. System Architecture
 
-### 4.1 ノード配置
+### 4.1 Node Layout
 
 ```
-┌────────────── Kachaka 本体 (192.168.1.91) ──────────────┐
+┌────────────── Kachaka body (192.168.1.91) ──────────────┐
 │  gRPC API :26400                                         │
-│   - SetRobotVelocity (Twist 入力)                         │
-│   - SetManualControlEnabled (Autoware Engage 時 true)      │
-│   - GetRosOdometry / GetRosImu / GetRosLaserScan ...       │
+│   - SetRobotVelocity (Twist input)                       │
+│   - SetManualControlEnabled (true on Autoware Engage)    │
+│   - GetRosOdometry / GetRosImu / GetRosLaserScan ...     │
 └──────────────────────────────────────────────────────────┘
         ↑ gRPC over WiFi/Ethernet
         │
-┌────── Autoware シェルフ（Kachaka に常時搭載） ──────────┐
-│  Jetson Thor (Ubuntu 24.04 + ROS 2 Jazzy)                 │
-│   ├─ Ouster OS-1 128 (シェルフ天面)                        │
-│   ├─ ouster-ros driver                                    │
-│   ├─ kachaka_grpc_ros2_bridge (既存)                       │
+┌────── Autoware shelf (always mounted on Kachaka) ───────┐
+│  Jetson Thor (Ubuntu 24.04 + ROS 2 Jazzy)                │
+│   ├─ Ouster OS-1 128 (top of the shelf)                  │
+│   ├─ ouster-ros driver                                   │
+│   ├─ kachaka_grpc_ros2_bridge (existing)                 │
 │   ├─ autoware_core_map / localization / planning / control │
-│   ├─ autoware_default_adapi + autoware_adapi_adaptors      │
-│   └─ kachaka_autoware_bridge / vehicle_interface (新規)     │
+│   ├─ autoware_default_adapi + autoware_adapi_adaptors    │
+│   └─ kachaka_autoware_bridge / vehicle_interface (new)   │
 └──────────────────────────────────────────────────────────┘
         │ DDS (ROS_DOMAIN_ID=123)
         │
-┌────── 開発PC（Jazzy）─────────────────────────────────────┐
-│  RViz2 + autoware_rviz_plugins                             │
-│  (InitialPoseButtonPanel / RouteTool / EngageButton 等)     │
+┌────── Development PC (Jazzy) ────────────────────────────┐
+│  RViz2 + autoware_rviz_plugins                           │
+│  (InitialPoseButtonPanel / RouteTool / EngageButton, ...) │
 └──────────────────────────────────────────────────────────┘
 ```
 
-### 4.2 TF ツリー
+### 4.2 TF Tree
 
 ```
 map  (NDT scan matcher)
- └─ odom  (autoware_ekf_localizer が publish)
+ └─ odom  (published by autoware_ekf_localizer)
      └─ base_footprint
-         └─ base_link  (Kachakaの kachaka_description)
+         └─ base_link  (Kachaka's kachaka_description)
              ├─ base_r_drive_wheel_link
              ├─ base_l_drive_wheel_link
-             ├─ ... (既存)
-             └─ docking_link  (既存 prismatic、ドッキング・リフト機構)
-                 └─ shelf_base_link  (新規 fixed、純正 3 段シェルフの底面中心)
+             ├─ ... (existing)
+             └─ docking_link  (existing prismatic, docking/lift mechanism)
+                 └─ shelf_base_link  (new fixed, bottom-center of the OEM 3-tier shelf)
                      ├─ shelf_bottom_board / middle_board / top_board
                      ├─ shelf_fl_post / fr_post / bl_post / br_post
-                     └─ shelf_top  (シェルフ上面、ペイロード取付アンカー)
-                         └─ os1_sensor  (新規 fixed, Ouster OS-1 128)
+                     └─ shelf_top  (top surface of the shelf, payload mount anchor)
+                         └─ os1_sensor  (new fixed, Ouster OS-1 128)
                              ├─ os1_imu
                              └─ os1_lidar
 ```
 
-`map → odom`: `autoware_ekf_localizer` が public（既存）
-`odom → base_footprint`: Kachakaの `dynamic_tf_bridge`（既存）
-`base_footprint → base_link → ... → docking_link`: Kachakaの `_kachaka.urdf.xacro` + `robot_state_publisher`（既存、無変更）。`docking_link` フレームは `base_link` 原点に置かれ、prismatic joint で 0–0.012 m リフトする。
-`docking_link → shelf_base_link`: `kachaka_description/urdf/_shelf_3tier.urdf.xacro` の `shelf_3tier` マクロを呼ぶときに **`<origin xyz="0 0 0.115"/>` を渡してソレノイド上面（cylinder center 0.1075 + half-length 0.0075）にシェルフ底面を載せる**。これでドッキング・リフト時もシェルフが追従する。マクロ自体は `*origin` を受け取れるよう改良済み。
-`shelf_base_link → shelf_*`: 同 `_shelf_3tier.urdf.xacro`（**改良で追加**、純正 3 段シェルフはKachakaの装備品なので kachaka_description の責務）
-`shelf_top → os1_sensor → os1_lidar/imu`: `kachaka_autoware_description/urdf/_ouster_os1.urdf.xacro`（新規パッケージ）
+`map → odom`: published by `autoware_ekf_localizer` (existing).
+`odom → base_footprint`: Kachaka's `dynamic_tf_bridge` (existing).
+`base_footprint → base_link → ... → docking_link`: from Kachaka's `_kachaka.urdf.xacro` + `robot_state_publisher` (existing, unchanged). The `docking_link` frame sits at the `base_link` origin and the prismatic joint lifts it 0–0.012 m.
+`docking_link → shelf_base_link`: when invoking the `shelf_3tier` macro from `kachaka_description/urdf/_shelf_3tier.urdf.xacro`, **pass `<origin xyz="0 0 0.115"/>` so the shelf's bottom rests on the top of the solenoid (cylinder center 0.1075 + half-length 0.0075)**. This makes the shelf follow the docking lift. The macro itself has been updated to accept an `*origin`.
+`shelf_base_link → shelf_*`: same `_shelf_3tier.urdf.xacro` (**added by this update**; the OEM 3-tier shelf is a Kachaka accessory, so it belongs in `kachaka_description`).
+`shelf_top → os1_sensor → os1_lidar/imu`: `kachaka_autoware_description/urdf/_ouster_os1.urdf.xacro` (new package).
 
-### 4.3 座標系の整合
+### 4.3 Coordinate-Frame Consistency
 
-- pointcloud_map と lanelet2 vector_map は **同一の local projection 原点** で生成する（Vector Map Builder の `map_projector_info.yaml` の origin と、SLAM ツールで pointcloud_map を作る際の世界原点を一致させる）。
-- Kachaka の内部 map 座標とは独立に Autoware の map 座標を運用する（一致は要求しない）。Kachaka の `/odometry`（odom 相対）の相対変位はそのまま EKF の `vehicle_velocity_converter` 経由で利用するが、Kachaka の絶対 pose は使わない。
-- これにより、pointcloud_map とlanelet2 が共通原点で揃っていれば NDT が出す map 座標がそのまま planning と整合する。
+- The pointcloud_map and the lanelet2 vector_map must be generated with **the same local projection origin** (the `origin` in Vector Map Builder's `map_projector_info.yaml` must match the world origin used by the SLAM tool that built the pointcloud_map).
+- Autoware's map frame is operated independently of Kachaka's internal map frame (no alignment is required). Relative displacement from Kachaka's `/odometry` (odom-relative) is used as is, fed through `vehicle_velocity_converter` into the EKF, but Kachaka's absolute pose is not used.
+- As long as the pointcloud_map and the lanelet2 map share the same origin, the map-frame poses produced by NDT remain consistent with planning.
 
-## 5. 新規パッケージ構成
+## 5. New Package Layout
 
-すべて kachaka-api リポジトリの `ros2/` 配下に置き、Kachaka本家のリリースサイクルに乗せる。
+All new packages live under `ros2/` in the kachaka-api repository, riding on the upstream Kachaka release cycle.
 
 ```
 ros2/
-├── kachaka_description/                            # ★ 改良: 純正 3 段シェルフのマクロを追加
+├── kachaka_description/                            # * Updated: macro for the OEM 3-tier shelf added
 │   └── urdf/
-│       └── _shelf_3tier.urdf.xacro                  # 新規: 3 段シェルフのマクロ。Kachaka装備品なのでこのパッケージに置く
-│   (既存ファイル _materials / _values / _kachaka 等は破壊変更しない)
+│       └── _shelf_3tier.urdf.xacro                  # New: 3-tier shelf macro. Belongs here because the shelf is a Kachaka accessory.
+│   (Existing files _materials / _values / _kachaka, etc. are not changed in a breaking way.)
 │
-├── kachaka_autoware_bridge/                        # メタ + 統合launch
+├── kachaka_autoware_bridge/                        # Meta package + integrated launch
 │   ├── package.xml
 │   ├── CMakeLists.txt
 │   └── launch/
-│       └── kachaka_autoware.launch.xml              # 全部入りエントリポイント
-├── kachaka_autoware_vehicle_interface/              # ★ 中核（C++ Vehicle Interface ノード）
+│       └── kachaka_autoware.launch.xml              # All-in-one entry point
+├── kachaka_autoware_vehicle_interface/              # * Core (C++ Vehicle Interface node)
 │   ├── src/
 │   │   ├── vehicle_interface_node.cpp               # Control→Twist + status + operation_mode
 │   │   ├── vehicle_interface_node.hpp
-│   │   ├── operation_mode_state_machine.cpp         # 簡易 mode decider
+│   │   ├── operation_mode_state_machine.cpp         # Lightweight mode decider
 │   │   └── operation_mode_state_machine.hpp
 │   ├── launch/vehicle_interface.launch.xml
 │   ├── config/vehicle_interface.param.yaml
 │   └── test/
 │       └── test_control_to_twist.cpp
-├── kachaka_autoware_description/                    # OS-1 + シェルフ装着済の完全 URDF + vehicle_info.yaml
+├── kachaka_autoware_description/                    # Full URDF (with OS-1 + shelf) + vehicle_info.yaml
 │   ├── urdf/
-│   │   ├── _ouster_os1.urdf.xacro                   # OS-1 128 のマクロ（簡易円筒モデル + lidar/imu フレーム）
-│   │   └── kachaka_with_shelf.urdf.xacro            # kachaka + 3 段シェルフ + OS-1 の完全 URDF
+│   │   ├── _ouster_os1.urdf.xacro                   # OS-1 128 macro (simple cylinder + lidar/imu frames)
+│   │   └── kachaka_with_shelf.urdf.xacro            # Full URDF: kachaka + 3-tier shelf + OS-1
 │   ├── config/
-│   │   └── vehicle_info.param.yaml                  # 差動駆動向け仮想値
+│   │   └── vehicle_info.param.yaml                  # Virtual values for differential drive
 │   └── launch/robot_description.launch.py
-└── kachaka_autoware_maps/                           # サンプルマップ配置先（実体は外部）
-    └── README.md                                     # ユーザー作成手順
+└── kachaka_autoware_maps/                           # Sample map location (assets stay external)
+    └── README.md                                     # Procedure for users to author maps
 ```
 
-新規パッケージの依存関係:
+Dependencies of the new packages:
 
 - `kachaka_autoware_vehicle_interface` → `autoware_control_msgs`, `autoware_vehicle_msgs`, `autoware_adapi_v1_msgs`, `geometry_msgs`, `nav_msgs`, `std_srvs`
-- `kachaka_autoware_description` → `kachaka_description`（改良後）, `xacro`, `robot_state_publisher`
-- `kachaka_autoware_bridge` → 上記 3 つ + `autoware_default_adapi`, `autoware_adapi_adaptors`, `autoware_core_*`
+- `kachaka_autoware_description` → `kachaka_description` (after the update), `xacro`, `robot_state_publisher`
+- `kachaka_autoware_bridge` → the three above + `autoware_default_adapi`, `autoware_adapi_adaptors`, `autoware_core_*`
 
-`kachaka_description` の改良:
-- `urdf/_shelf_3tier.urdf.xacro` を追加: `xacro:macro name="shelf_3tier" params="parent shelf_name"` を提供
-- `urdf/_materials.urdf.xacro` にシェルフ用マテリアル（`shelf_board` / `shelf_post`）追加
-- 既存の `_kachaka.urdf.xacro` / `_values.urdf.xacro` / `kachaka.urdf.xacro` には触らない（破壊変更を避け、既存ユーザーの URDF 出力を変えない）
+Updates to `kachaka_description`:
 
-## 6. Localization 設計
+- Add `urdf/_shelf_3tier.urdf.xacro`, providing `xacro:macro name="shelf_3tier" params="parent shelf_name"`.
+- Add shelf materials (`shelf_board` / `shelf_post`) to `urdf/_materials.urdf.xacro`.
+- Do not touch existing `_kachaka.urdf.xacro` / `_values.urdf.xacro` / `kachaka.urdf.xacro` (avoid breaking changes so existing users' URDF output stays the same).
 
-### 6.1 入力
+## 6. Localization Design
 
-- OS-1 128: `ouster-ros` driver で `/sensing/lidar/top/pointcloud_raw_ex` (`sensor_msgs/PointCloud2`) として発行
-- Kachaka wheel odometry: 既存 `wheel_odometry_component` の `/kachaka/wheel_odometry/wheel_odometry`
-  - Vehicle Interface が `/vehicle/status/velocity_status` (`autoware_vehicle_msgs/VelocityReport`) として再発行
-  - `vehicle_velocity_converter` が `/sensing/vehicle_velocity_converter/twist_with_covariance` に変換
-  - **要検証**: Kachaka 内部で `wheel_odometry` がホイールエンコーダ＋IMU ベースで生成されている前提だが、もし内部実装が 2D LiDAR にも依存していると故障の影響を受ける可能性がある。M2 立ち上げ時に実機で確認し、もし使えない場合は IMU (`/kachaka/imu/imu`) と Kachaka の `wheel_odometry` の角速度成分のみから自前で twist を組み立てる代替経路を実装する
+### 6.1 Inputs
 
-### 6.2 構成
+- OS-1 128: published by the `ouster-ros` driver as `/sensing/lidar/top/pointcloud_raw_ex` (`sensor_msgs/PointCloud2`).
+- Kachaka wheel odometry: existing `wheel_odometry_component` topic `/kachaka/wheel_odometry/wheel_odometry`.
+  - The Vehicle Interface republishes it as `/vehicle/status/velocity_status` (`autoware_vehicle_msgs/VelocityReport`).
+  - `vehicle_velocity_converter` converts it to `/sensing/vehicle_velocity_converter/twist_with_covariance`.
+  - **To verify:** the design assumes Kachaka's internal `wheel_odometry` is generated from wheel encoders + IMU, but if the internal implementation also depends on the 2D LiDAR, the LiDAR's unavailability could affect it. Verify on the real robot during M2; if unusable, implement a fallback path that builds the twist locally from the IMU (`/kachaka/imu/imu`) and the angular-velocity component of Kachaka's `wheel_odometry`.
 
-`autoware_core_localization.launch.xml` をほぼそのまま使い、以下のパラメータ調整のみ行う:
+### 6.2 Configuration
+
+Use `autoware_core_localization.launch.xml` largely as-is, with only the following parameter tweaks:
 
 - `pose_initializer.param.yaml`:
   - `gnss_enabled: false`
@@ -200,84 +201,84 @@ ros2/
   - `pose_error_check_enabled: false`
   - `stop_check_enabled: true`
 - `ndt_scan_matcher.param.yaml`:
-  - `initial_pose_estimation.particles_num` を実機チューニング
-  - `align_using_monte_carlo: true`（全範囲探索を許可）
-- GNSS topic はノードを起動しない（`gnss_enabled: false` で `pose_initializer` 側は GNSS をブロックしないため、`/sensing/gnss/pose_with_covariance` への空 publisher は不要）。`autoware_core_localization.launch.xml` への launch arg `gnss_input_topic` は空文字に上書き
+  - Tune `initial_pose_estimation.particles_num` on the real robot.
+  - `align_using_monte_carlo: true` (allow full-range search).
+- Do not start any GNSS topic node (with `gnss_enabled: false`, `pose_initializer` does not block on GNSS, so an empty publisher on `/sensing/gnss/pose_with_covariance` is unnecessary). Override the launch arg `gnss_input_topic` of `autoware_core_localization.launch.xml` with an empty string.
 
-### 6.3 出力
+### 6.3 Outputs
 
-- `/localization/kinematic_state` (`nav_msgs/Odometry`) — 下流で唯一参照される真実
-- `/localization/acceleration` (`geometry_msgs/AccelWithCovarianceStamped`)
-- TF: `map → odom`
+- `/localization/kinematic_state` (`nav_msgs/Odometry`) — the single source of truth used downstream.
+- `/localization/acceleration` (`geometry_msgs/AccelWithCovarianceStamped`).
+- TF: `map → odom`.
 
-## 7. Planning 設計
+## 7. Planning Design
 
-`autoware_core_planning.launch.xml` をほぼそのまま使い、以下を調整:
+Use `autoware_core_planning.launch.xml` largely as-is, with the following adjustments:
 
-- `vehicle_param_file`: 新規 `kachaka_autoware_description/config/vehicle_info.param.yaml`
-- `motion_velocity_planner_launch_modules`: MVPでは `[]`（ObstacleStop 無効）。M6 で有効化する際は **OS-1 128 由来の点群** を `/perception/obstacle_segmentation/pointcloud` に流す（Kachaka の 2D LiDAR は故障しているため使えない）。地面除去は `autoware_crop_box_filter` 等で対応。
-- 入力 perception トピック（`/perception/object_recognition/objects`, `/perception/obstacle_segmentation/pointcloud`, `/perception/traffic_light_recognition/traffic_signals`, `/perception/occupancy_grid_map/map` 等）は M4 立ち上げ時に **実機検証** する。`behavior_velocity_planner` / `motion_velocity_planner` が起動できないトピックがあれば `kachaka_autoware_bridge` 内で空メッセージを 1 Hz で publish する補助ノード `perception_stub` を追加する（M4 で必要性判定）。
+- `vehicle_param_file`: the new `kachaka_autoware_description/config/vehicle_info.param.yaml`.
+- `motion_velocity_planner_launch_modules`: `[]` for the MVP (ObstacleStop disabled). When enabling it in M6, feed the **OS-1 128 point cloud** into `/perception/obstacle_segmentation/pointcloud` (Kachaka's 2D LiDAR is unavailable). Ground removal can be handled with `autoware_crop_box_filter` or similar.
+- Input perception topics (`/perception/object_recognition/objects`, `/perception/obstacle_segmentation/pointcloud`, `/perception/traffic_light_recognition/traffic_signals`, `/perception/occupancy_grid_map/map`, etc.) are to be **verified on the real robot** during M4 startup. If `behavior_velocity_planner` / `motion_velocity_planner` cannot start due to a missing topic, add a helper node `perception_stub` inside `kachaka_autoware_bridge` that publishes an empty message at 1 Hz (decision made in M4).
 
-### 7.1 ゴール受信フロー
+### 7.1 Goal Reception Flow
 
-1. RViz `RouteTool` (autoware_rviz_plugins) が `/api/routing/set_route_points` を呼ぶ
-2. `autoware_default_adapi/routing` が変換して `/planning/mission_planning/set_waypoint_route` を呼ぶ
-3. `mission_planner` が lanelet2 上で route を計算して `/planning/route` を発行
-4. `path_generator` → `behavior_velocity_planner` → `motion_velocity_planner` → `velocity_smoother` → `/planning/trajectory`
+1. RViz `RouteTool` (autoware_rviz_plugins) calls `/api/routing/set_route_points`.
+2. `autoware_default_adapi/routing` translates that into a call to `/planning/mission_planning/set_waypoint_route`.
+3. `mission_planner` computes the route on lanelet2 and publishes `/planning/route`.
+4. `path_generator` → `behavior_velocity_planner` → `motion_velocity_planner` → `velocity_smoother` → `/planning/trajectory`.
 
-## 8. Control 設計
+## 8. Control Design
 
-`autoware_simple_pure_pursuit` を **そのまま使用**。fork しない。
+Use `autoware_simple_pure_pursuit` **as-is**; do not fork it.
 
-- 入力: `/localization/kinematic_state`, `/planning/trajectory`
-- 出力: `/control/command/control_cmd` (`autoware_control_msgs/Control`)
-- `vehicle_info` の `wheel_base` は差動駆動に対する仮想値（後述）
+- Inputs: `/localization/kinematic_state`, `/planning/trajectory`.
+- Output: `/control/command/control_cmd` (`autoware_control_msgs/Control`).
+- The `wheel_base` in `vehicle_info` is a virtual value for the differential drive (described below).
 
-## 9. Vehicle Interface 設計（中核）
+## 9. Vehicle Interface Design (core component)
 
-### 9.1 ノード概要
+### 9.1 Node Overview
 
-`kachaka_vehicle_interface_node` は単一のノード（`rclcpp::Node`）として実装し、以下の責務を持つ。
+`kachaka_vehicle_interface_node` is implemented as a single node (`rclcpp::Node`) with the following responsibilities.
 
-#### A. Control → Twist 変換
+#### A. Control → Twist conversion
 
-- 購読: `/control/command/control_cmd`
-- 自転車モデル → 差動駆動への変換式:
+- Subscribes to: `/control/command/control_cmd`.
+- Bicycle-model → differential-drive conversion:
   - `v = control.longitudinal.velocity`
   - `omega = v * tan(control.lateral.steering_tire_angle) / wheel_base`
-- 出力: `geometry_msgs/Twist`
-- リミット: `|v| ≤ 0.3 m/s`, `|omega| ≤ 1.57 rad/s`（既存 ManualControl の上限と整合）
+- Output: `geometry_msgs/Twist`.
+- Limits: `|v| ≤ 0.3 m/s`, `|omega| ≤ 1.57 rad/s` (consistent with the existing ManualControl limits).
 
-#### B. cmd_vel publish ゲート
+#### B. cmd_vel publish gate
 
-- `/system/operation_mode/state` を購読し、`mode == AUTONOMOUS` のときだけ `/kachaka/manual_control/cmd_vel` に Twist を流す。
-- それ以外のモードでは publish 自体を停止。
+- Subscribes to `/system/operation_mode/state`; only when `mode == AUTONOMOUS` does it publish the Twist on `/kachaka/manual_control/cmd_vel`.
+- In any other mode, publishing is suppressed entirely.
 
-#### C. /vehicle/status/velocity_status publish
+#### C. /vehicle/status/velocity_status publishing
 
-- 購読: Kachakaの `wheel_odometry`（既存）または `/odometry/odometry`
-- 変換: `nav_msgs/Odometry` → `autoware_vehicle_msgs/VelocityReport`
+- Subscribes to: Kachaka's `wheel_odometry` (existing) or `/odometry/odometry`.
+- Conversion: `nav_msgs/Odometry` → `autoware_vehicle_msgs/VelocityReport`:
   - `longitudinal_velocity = twist.linear.x`
-  - `lateral_velocity = 0.0`（差動駆動）
+  - `lateral_velocity = 0.0` (differential drive)
   - `heading_rate = twist.angular.z`
-- 周期: 50 Hz
+- Rate: 50 Hz.
 
-#### D. Manual Control 自動有効化
+#### D. Manual Control auto-enable
 
-- ノード起動時に Kachakaの `/kachaka/manual_control/set_enabled` サービスを `true` で呼ぶ
-- ノード停止時には `false` で呼ぶ（destructor / on_shutdown）
+- On node startup, call Kachaka's `/kachaka/manual_control/set_enabled` service with `true`.
+- On node shutdown, call it with `false` (destructor / on_shutdown).
 
-#### E. Operation Mode 状態機械
+#### E. Operation Mode state machine
 
-`autoware_default_adapi` の `autoware_core` 版には `operation_mode` ノードが含まれないため、Vehicle Interface 内に簡易状態機械を実装する:
+`autoware_default_adapi` in the `autoware_core` family does not include an `operation_mode` node, so a lightweight state machine is implemented inside the Vehicle Interface:
 
-- 状態: `STOP` / `AUTONOMOUS`（MVPではこの2つだけ）
-- 提供サービス: `/system/operation_mode/change_to_autonomous`, `/system/operation_mode/change_to_stop`
-- 発行トピック: `/system/operation_mode/state` (`autoware_adapi_v1_msgs/OperationModeState`) を 10 Hz で publish
-- 起動時の初期状態は `STOP`、RViz EngageButton 経由で `AUTONOMOUS` に遷移
-- 将来 C スコープに発展させる際は、このノードを `autoware_command_mode_decider`（Universe）に置き換え可能なよう、責務を 9.1 のサブモジュール構造で分離して実装する
+- States: `STOP` / `AUTONOMOUS` (only these two for the MVP).
+- Services provided: `/system/operation_mode/change_to_autonomous`, `/system/operation_mode/change_to_stop`.
+- Topic published: `/system/operation_mode/state` (`autoware_adapi_v1_msgs/OperationModeState`) at 10 Hz.
+- Initial state at startup is `STOP`; transitions to `AUTONOMOUS` via the RViz EngageButton.
+- To leave room for evolving toward scope C, the responsibilities are split across the submodules listed in 9.1 so that this node can later be replaced by `autoware_command_mode_decider` (Universe) by swapping out only the Operation Mode submodule.
 
-### 9.2 設定
+### 9.2 Configuration
 
 `config/vehicle_interface.param.yaml`:
 
@@ -286,43 +287,43 @@ ros2/
   ros__parameters:
     max_linear_velocity: 0.3
     max_angular_velocity: 1.57
-    cmd_vel_timeout: 0.5         # [sec] これを超えたら停止
+    cmd_vel_timeout: 0.5         # [sec] stop if exceeded
     publish_period_velocity_status: 0.02  # 50 Hz
     publish_period_operation_mode: 0.1     # 10 Hz
     auto_enable_manual_control: true
 ```
 
-### 9.3 vehicle_info.param.yaml（差動駆動向け仮想値）
+### 9.3 vehicle_info.param.yaml (virtual values for differential drive)
 
 ```yaml
 /**:
   ros__parameters:
     wheel_radius: 0.045
     wheel_width: 0.025
-    wheel_base: 0.30          # 仮想値、pure_pursuit の旋回係数として機能
-    wheel_tread: 0.20         # Kachaka URDF 実値
+    wheel_base: 0.30          # virtual value, acts as the turn coefficient for pure_pursuit
+    wheel_tread: 0.20         # actual value from the Kachaka URDF
     front_overhang: 0.237      # body collision +X: 0.0435 + 0.387/2
     rear_overhang: 0.150       # body collision -X: -(0.0435 - 0.387/2)
     left_overhang: 0.120       # body collision +Y: 0 + 0.240/2
     right_overhang: 0.120      # body collision -Y: -(0 - 0.240/2)
-    vehicle_height: 1.20      # シェルフ込み
+    vehicle_height: 1.20      # including the shelf
     max_steer_angle: 1.5708
 ```
 
-`wheel_base` は実機チューニング項目。0.30 を初期値とし、旋回が鋭すぎる場合は大きく、鈍い場合は小さくする。
+`wheel_base` is a tuning parameter on the real robot. Start at 0.30; increase if turns are too sharp, decrease if they are too sluggish.
 
-## 10. AD-API 連携
+## 10. AD-API Integration
 
-### 10.1 起動
+### 10.1 Launch
 
-`autoware_core_api.launch.xml` をそのまま使う:
+Use `autoware_core_api.launch.xml` as-is:
 
 - `autoware_default_adapi` (`interface` / `localization` / `routing`)
 - `autoware_adapi_adaptors` (`initial_pose_adaptor` / `routing_adaptor`)
 
-### 10.2 RViz パネル
+### 10.2 RViz Panels
 
-`autoware_rviz_plugins` を別途 clone・build:
+Clone and build `autoware_rviz_plugins` separately:
 
 ```bash
 cd ~/ros/jazzy/src
@@ -331,25 +332,25 @@ cd ~/ros/jazzy
 colcon build --packages-select autoware_rviz_plugins
 ```
 
-採用パネル:
+Panels used:
 
-| パネル | 役割 |
+| Panel | Role |
 |---|---|
-| `InitialPoseButtonPanel` | 初期姿勢の確定（NDT monte carlo 起動） |
-| `RouteTool`（または標準 `2D Goal Pose`） | ゴール指定 → `/api/routing/set_route_points` |
-| `EngageButton` | AUTONOMOUS 遷移 |
-| `AutowareStatePanel` | operation_mode 表示 |
+| `InitialPoseButtonPanel` | Confirm the initial pose (kicks off NDT monte carlo) |
+| `RouteTool` (or the standard `2D Goal Pose`) | Specify the goal → `/api/routing/set_route_points` |
+| `EngageButton` | Transition to AUTONOMOUS |
+| `AutowareStatePanel` | Display the current operation_mode |
 
-### 10.3 操作シーケンス（MVP）
+### 10.3 Operating Sequence (MVP)
 
-1. Thor 上で `kachaka_autoware.launch.xml` を起動
-2. 開発 PC で RViz2 起動、`autoware.rviz` 設定読込
-3. `InitialPoseButtonPanel` で「Initialize」ボタン押下 → NDT monte carlo で初期姿勢確定
-4. `RouteTool` で目標位置指定 → trajectory 生成確認
-5. `EngageButton` で AUTONOMOUS 遷移 → Vehicle Interface が cmd_vel を流し始め Kachaka が移動
-6. ゴール到達 → trajectory が短くなり pure_pursuit が停止指令、自動的に STOP モードに戻る
+1. Launch `kachaka_autoware.launch.xml` on Thor.
+2. Start RViz2 on the development PC and load the `autoware.rviz` configuration.
+3. Press "Initialize" on `InitialPoseButtonPanel` → NDT monte carlo confirms the initial pose.
+4. Specify the goal via `RouteTool` → confirm the trajectory is generated.
+5. Press `EngageButton` to transition to AUTONOMOUS → the Vehicle Interface starts emitting cmd_vel and Kachaka begins moving.
+6. On reaching the goal, the trajectory shortens, pure_pursuit issues a stop command, and the system automatically returns to the STOP mode.
 
-## 11. データフロー（要点図）
+## 11. Data Flow (key diagram)
 
 ```
 OS-1 → /sensing/lidar/top/pointcloud_raw_ex
@@ -368,73 +369,73 @@ OS-1 → /sensing/lidar/top/pointcloud_raw_ex
    /control/command/control_cmd  (autoware_control_msgs/Control)
         ↓
    kachaka_vehicle_interface
-        ↓ (operation_mode == AUTONOMOUS のみ)
+        ↓ (only when operation_mode == AUTONOMOUS)
    /kachaka/manual_control/cmd_vel  (geometry_msgs/Twist)
         ↓ gRPC SetRobotVelocity
-   Kachaka 本体
+   Kachaka body
 ```
 
-## 12. エラー処理 / フェイルセーフ
+## 12. Error Handling / Fail-safe
 
-| 異常 | 検出 | 動作 |
+| Anomaly | Detection | Action |
 |---|---|---|
-| Control msg 受信タイムアウト | Vehicle Interface が `cmd_vel_timeout` 超過 | ゼロ Twist を 1 秒間 publish して停止 |
-| Operation Mode != AUTONOMOUS | Vehicle Interface | publish 停止（cmd_vel 流さない） |
-| Kachaka SetRobotVelocity 拒否 | gRPC `kErrorCodeApiGrpcSetRobotVelocityNotInTeleopMode` | 既存 `ManualControlComponent` のリトライ |
-| NDT スコア悪化 | （MVP外）`exe_time_ms` / score 監視 | M6 で実装、当面は人手監視 |
-| ノード単独 crash | rclcpp 標準 | systemd / launch lifecycle で再起動（運用設計） |
+| Control msg receive timeout | Vehicle Interface exceeds `cmd_vel_timeout` | Publish a zero Twist for 1 second to stop |
+| Operation Mode != AUTONOMOUS | Vehicle Interface | Suppress publishing (no cmd_vel emitted) |
+| Kachaka SetRobotVelocity rejected | gRPC `kErrorCodeApiGrpcSetRobotVelocityNotInTeleopMode` | Existing `ManualControlComponent` retry |
+| NDT score degradation | (post-MVP) monitor `exe_time_ms` / score | Implemented in M6; manual monitoring for now |
+| Single-node crash | Standard rclcpp | Restart via systemd / launch lifecycle (operations design) |
 
-## 13. テスト戦略
+## 13. Test Strategy
 
-### 13.1 単体テスト（gtest）
+### 13.1 Unit Tests (gtest)
 
 - `kachaka_autoware_vehicle_interface`:
-  - Control → Twist 変換の境界値（v=0, δ=0, δ=max）
-  - Operation Mode 状態遷移（STOP → AUTONOMOUS → STOP）
-  - cmd_vel timeout 時のゼロ Twist 発行
-  - velocity_status 変換
+  - Boundary cases of the Control → Twist conversion (v=0, δ=0, δ=max).
+  - Operation Mode state transitions (STOP → AUTONOMOUS → STOP).
+  - Zero-Twist emission on cmd_vel timeout.
+  - velocity_status conversion.
 
-### 13.2 結合テスト
+### 13.2 Integration Tests
 
-- ros2 bag を録っておき（OS-1 + Kachaka odometry + control_cmd）、オフライン再生で NDT/EKF 出力の回帰テスト
-- AD-API シナリオテスト（`autoware_default_adapi/test` を参考）
+- Record a ros2 bag (OS-1 + Kachaka odometry + control_cmd) and run regression tests on NDT/EKF output via offline replay.
+- AD-API scenario tests (modeled on `autoware_default_adapi/test`).
 
-### 13.3 システムテスト（実機）
+### 13.3 System Tests (real robot)
 
-- 自宅環境で 2D Goal Pose を 5 箇所、各 3 回試行
-- 成功条件: Goal Pose ± 0.3 m / ± 0.2 rad 以内に到達、人手介入なし
-- 失敗時のログ: rosbag フル録画
+- In the home environment, try 5 different 2D Goal Poses, 3 attempts each.
+- Success criterion: reach within ± 0.3 m / ± 0.2 rad of the goal pose, with no human intervention.
+- On failure: keep a full rosbag.
 
-## 14. 段階的ビルドアップ（マイルストーン）
+## 14. Phased Build-up (Milestones)
 
-| ID | 内容 | 完了条件 |
+| ID | Content | Done when |
 |---|---|---|
-| **M0** | 事前作業 | OS-1 単独で pointcloud_map.pcd 作成 / lanelet2_map.osm 作成（同一原点）/ OS-1 物理固定 + キャリブ |
-| **M1** | センサー統合 | OS-1 が ROS 2 で発行、TF ツリー完成、RViz で base_footprint 基準の点群が見える |
-| **M2** | Localization | NDT + EKF が `/localization/kinematic_state` を出す（Kachaka 静止状態で確認）。`wheel_odometry` の妥当性を実機確認、NG なら IMU フォールバック実装 |
-| **M3** | Vehicle Interface 基盤 | Control→Twist 変換、velocity_status、operation_mode 状態機械、ManualControl 自動有効化 |
-| **M4** | Planning | mission_planner→trajectory 生成（手動 trigger） |
-| **M5** | 閉ループ | AD-API + RViz から 1 点指定で Kachaka が移動（**MVP 達成**） |
-| **M6** | 仕上げ | OS-1 由来の障害物停止 / 複数waypoint / dock 連携（後続フェーズ） |
+| **M0** | Prerequisite work | OS-1-only `pointcloud_map.pcd` built / `lanelet2_map.osm` built (same origin) / OS-1 physically mounted and calibrated |
+| **M1** | Sensor integration | OS-1 publishes on ROS 2, the TF tree is complete, RViz shows the point cloud relative to `base_footprint` |
+| **M2** | Localization | NDT + EKF emit `/localization/kinematic_state` (verified with Kachaka stationary). Validate `wheel_odometry` on the real robot; if NG, implement the IMU fallback |
+| **M3** | Vehicle Interface foundation | Control→Twist conversion, velocity_status, operation_mode state machine, Manual Control auto-enable |
+| **M4** | Planning | mission_planner→trajectory generation (manually triggered) |
+| **M5** | Closed loop | A single-point goal from AD-API + RViz makes Kachaka move (**MVP achieved**) |
+| **M6** | Polish | OS-1-based obstacle stop / multi-waypoint / dock integration (post-MVP) |
 
-## 15. 将来拡張への余地（B → C へ）
+## 15. Room for Future Extension (B → C)
 
-Vehicle Interface のサブモジュール分離（Control 変換 / velocity_status / operation_mode）により、将来 Universe の `autoware_command_mode_decider` 等に置き換える際は **Operation Mode 状態機械サブモジュールだけ** 差し替えれば良い。Control 変換と velocity_status は Kachaka 固有なので残る。
+The submodule split inside the Vehicle Interface (Control conversion / velocity_status / operation_mode) means that when migrating to a future Universe component such as `autoware_command_mode_decider`, **only the Operation Mode state-machine submodule** needs to be swapped out. The Control conversion and velocity_status remain because they are Kachaka-specific.
 
-## 16. リスクと未確定事項
+## 16. Risks and Open Issues
 
-| 項目 | リスク | 対応 |
+| Item | Risk | Mitigation |
 |---|---|---|
-| `wheel_base` 仮想値のチューニング | 旋回特性が直感に合わない可能性 | M5 で実機値調整、param.yaml に明記 |
-| pointcloud_map 作成の手間 | M0 で時間がかかる、Kachakaの 2D LiDAR が壊れているため OS-1 単独で行うしかない | lio_sam / fast_lio / glim 経験者の知見をリサーチ。手押し / テレオペでマッピング走行 |
-| 屋内 NDT のロバスト性 | 特徴の少ない壁面で divergence。Kachakaの SLAM を fallback に使えない | M2 で実機評価、必要なら voxel_size 調整。NDT 単独失敗時のフェイルセーフは AUTONOMOUS 自動解除（pose error チェック）で対応 |
-| Kachaka `wheel_odometry` の妥当性 | 2D LiDAR 故障の影響で内部融合がおかしい可能性 | M2 で実機検証。NG なら IMU + 角速度から twist を自前生成する代替経路を実装 |
-| OS-1 128 + Thor の発熱・電源 | シェルフ運用での連続動作 | 別途熱・電源設計（本仕様書の範囲外） |
-| Kachaka 内蔵 navigation との競合 | gRPC 側で独自に動き出す可能性 | `set_manual_control_enabled(true)` で抑止 |
-| 障害物停止の代替センサーが OS-1 のみ | 2D LiDAR 故障により Kachakaの近接センサ群を活用できない | M6 で OS-1 128 の点群を地面除去 → ObstacleStop 入力。地面除去パラメータが屋内向きにチューニングが必要 |
+| Tuning the virtual `wheel_base` | Turning behavior may not match intuition | Tune on the real robot in M5; document the value in param.yaml |
+| Effort to build the pointcloud_map | M0 takes time; OS-1 must do it alone since Kachaka's 2D LiDAR is unavailable | Research best practices from lio_sam / fast_lio / glim users; map by pushing or teleoping the robot |
+| Robustness of indoor NDT | Divergence on featureless walls; Kachaka's SLAM cannot serve as a fallback | Evaluate on the real robot in M2 and tune voxel_size as needed. NDT-failure fail-safe is automatic AUTONOMOUS release (pose-error check) |
+| Validity of Kachaka `wheel_odometry` | Internal sensor fusion may be off due to the missing 2D LiDAR | Verify on the real robot in M2; if NG, implement a fallback that builds the twist locally from IMU + angular velocity |
+| Heat and power for OS-1 128 + Thor | Continuous operation in shelf-mounted form factor | Handled separately in thermal/power design (out of scope for this spec) |
+| Conflict with Kachaka's built-in navigation | The robot may start moving on its own via gRPC | Suppressed via `set_manual_control_enabled(true)` |
+| OS-1 as the only obstacle-stop sensor | Kachaka's proximity sensors cannot be used because of the 2D LiDAR situation | In M6, feed OS-1 128 point cloud through ground removal into ObstacleStop. Ground-removal parameters need indoor tuning |
 
-## 17. オープンな質問（実装前に決めたいが本仕様書では未確定）
+## 17. Open Questions (to be decided before implementation, not fixed by this spec)
 
-- Vehicle Interface ノードを Thor 上のどのプロセスに置くか（`grpc_ros2_bridge_container` に同居 vs 独立 container）
-- Operation Mode 簡易状態機械の `change_to_*` サービスを **複数同時呼び出し** された場合のセマンティクス
-- pointcloud_map のサイズが大きい場合の Thor メモリ運用
+- Which process on Thor hosts the Vehicle Interface node (co-located in `grpc_ros2_bridge_container` vs. a separate container)?
+- Semantics of the Operation Mode state machine's `change_to_*` services when **multiple are called simultaneously**.
+- Memory operation on Thor when the pointcloud_map is large.
