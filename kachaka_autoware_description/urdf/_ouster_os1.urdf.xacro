@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<robot name="ouster_os1" xmlns:xacro="http://ros.org/wiki/xacro">
+  <!--
+    Simplified Ouster OS-1 (128) model.
+    body: cylinder (diameter 85 mm, height 73.5 mm).
+    os1_lidar / os1_imu frame offsets follow the Ouster ICD.
+    Can be replaced by the official ouster_description if it becomes available.
+  -->
+  <xacro:macro name="ouster_os1"
+               params="parent
+                       name:=os1
+                       *origin
+                       body_radius:=0.0425
+                       body_height:=0.0735
+                       lidar_to_sensor_z:=0.03618
+                       imu_offset_x:=0.006253
+                       imu_offset_y:=-0.011775
+                       imu_offset_z:=0.007645">
+
+    <link name="${name}_sensor">
+      <visual>
+        <origin xyz="0 0 ${body_height/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${body_height}" radius="${body_radius}"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${body_height/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${body_height}" radius="${body_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+    <joint name="${name}_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${name}_sensor"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <link name="${name}_lidar"/>
+    <joint name="${name}_lidar_joint" type="fixed">
+      <parent link="${name}_sensor"/>
+      <child link="${name}_lidar"/>
+      <origin xyz="0 0 ${lidar_to_sensor_z}" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${name}_imu"/>
+    <joint name="${name}_imu_joint" type="fixed">
+      <parent link="${name}_sensor"/>
+      <child link="${name}_imu"/>
+      <origin xyz="${imu_offset_x} ${imu_offset_y} ${imu_offset_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

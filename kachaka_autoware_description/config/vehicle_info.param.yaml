@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    # Kachaka physical wheel parameters (from kachaka_description URDF)
+    wheel_radius: 0.045
+    wheel_width: 0.025
+    wheel_tread: 0.20
+
+    # Virtual wheel_base for Ackermann-style controllers (e.g. autoware_simple_pure_pursuit).
+    # Kachaka is differential-drive; this value acts as the curvature coefficient
+    # in v * tan(delta) / wheel_base. Tune in M5 if turning is too sharp/dull.
+    wheel_base: 0.30
+
+    # Footprint overhangs measured from base_link origin to body extents.
+    # Body collision box (kachaka_description/_kachaka.urdf.xacro):
+    #   center=(0.0435, 0, 0.0475), size=(0.387, 0.240, 0.095)
+    #   x range: -0.150 .. 0.237, y range: -0.120 .. 0.120
+    front_overhang: 0.237
+    rear_overhang: 0.150
+    left_overhang: 0.120
+    right_overhang: 0.120
+
+    # Total height including the 3-tier shelf and the OS-1 on top
+    vehicle_height: 1.20
+
+    # Generous steering limit since differential-drive can spin in place
+    max_steer_angle: 1.5708

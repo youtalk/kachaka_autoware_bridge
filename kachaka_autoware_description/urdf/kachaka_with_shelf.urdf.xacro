@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<robot name="kachaka_with_shelf" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find kachaka_description)/urdf/_materials.urdf.xacro"/>
+  <xacro:include filename="$(find kachaka_description)/urdf/_values.urdf.xacro"/>
+  <xacro:include filename="$(find kachaka_description)/urdf/_kachaka.urdf.xacro"/>
+  <xacro:include filename="$(find kachaka_description)/urdf/_shelf_3tier.urdf.xacro"/>
+  <xacro:include filename="$(find kachaka_autoware_description)/urdf/_ouster_os1.urdf.xacro"/>
+
+  <link name="base_footprint"/>
+
+  <xacro:kachaka_robot parent="base_footprint">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:kachaka_robot>
+
+  <!--
+    docking_link is Kachaka's docking lift mechanism (prismatic joint).
+    The frame itself sits at base_link origin; the solenoid that supports
+    the shelf reaches up to z ≈ 0.115 m (cylinder center 0.1075 + half
+    length 0.0075). Mount the shelf bottom there so the published TF
+    matches the physical sensor pose. The shelf still follows the lift
+    (up to +0.012 m) because docking_link is a prismatic child of base_link.
+  -->
+  <xacro:shelf_3tier parent="docking_link">
+    <origin xyz="0 0 0.115" rpy="0 0 0"/>
+  </xacro:shelf_3tier>
+
+  <!-- Mount the Ouster OS-1 at the shelf top center; override origin with values measured in M0 Task 4. -->
+  <xacro:ouster_os1 parent="shelf_top">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:ouster_os1>
+
+</robot>
