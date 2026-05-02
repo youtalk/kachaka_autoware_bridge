@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname or IP. Override per robot (e.g. os-&lt;serial&gt;.local)."/>
+  <arg name="metadata" default="/tmp/os1_metadata.json"
+       description="Path to ouster metadata cache"/>
+
+  <include file="$(find-pkg-share ouster_ros)/launch/sensor.launch.xml">
+    <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
+    <arg name="metadata" value="$(var metadata)"/>
+  </include>
+
+  <node pkg="topic_tools" exec="relay" name="ouster_to_autoware_relay">
+    <param name="input_topic" value="/ouster/points"/>
+    <param name="output_topic" value="/sensing/lidar/top/pointcloud_raw_ex"/>
+  </node>
+
+  <node pkg="topic_tools" exec="relay" name="ouster_imu_relay">
+    <param name="input_topic" value="/ouster/imu"/>
+    <param name="output_topic" value="/sensing/imu/imu"/>
+  </node>
+</launch>

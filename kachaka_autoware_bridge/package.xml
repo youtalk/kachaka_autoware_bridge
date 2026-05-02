@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>kachaka_autoware_bridge</name>
+  <version>0.0.0</version>
+  <description>Launch wrappers connecting Kachaka sensors to Autoware Core. Currently provides the Ouster OS-1 driver wrapper that publishes onto Autoware-expected topics; additional launches (localization, planning, control, integrated bringup) land in subsequent PRs.</description>
+  <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
+  <license>Apache License 2.0</license>
+  <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>launch_xml</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
+  <exec_depend>ouster_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
