@@ -7,11 +7,11 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/snapshot_map)
-  install(PROGRAMS scripts/snapshot_map
-          DESTINATION lib/${PROJECT_NAME})
+  install(PROGRAMS scripts/snapshot_map DESTINATION lib/${PROJECT_NAME})
 endif()
 
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME} OPTIONAL)
+install(
+  DIRECTORY launch DESTINATION share/${PROJECT_NAME} OPTIONAL)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
