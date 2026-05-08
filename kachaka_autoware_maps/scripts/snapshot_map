@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Capture one /ouster/points frame, transform to base_footprint, write a complete map directory.
+
+Designed for a stationary Kachaka. The robot must not move between launch
+and the snapshot completing; the resulting map is throwaway and intended
+only for verifying that kachaka_autoware.launch.xml comes up without map
+loader errors.
+"""
+
+import sys
+from pathlib import Path
+from threading import Event
+
+import rclpy
+import tf2_ros
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
+
+from kachaka_autoware_maps.pcd_io import write_pcd_binary
+from kachaka_autoware_maps.sidecars import write_sidecars_if_absent
+
+DEFAULT_TARGET_FRAME = "base_footprint"
+DEFAULT_INPUT_TOPIC = "/ouster/points"
+DEFAULT_OUTPUT_DIR = str(Path.home() / "maps" / "kachaka_pipeline_test")
+TF_TIMEOUT_SEC = 5.0
+CLOUD_TIMEOUT_SEC = 15.0
+
+
+class SnapshotNode(Node):
+    def __init__(self) -> None:
+        super().__init__("snapshot_map")
+        self.declare_parameter("target_frame", DEFAULT_TARGET_FRAME)
+        self.declare_parameter("input_topic", DEFAULT_INPUT_TOPIC)
+        self.declare_parameter("output_dir", DEFAULT_OUTPUT_DIR)
+
+        self.target_frame = str(self.get_parameter("target_frame").value)
+        self.input_topic = str(self.get_parameter("input_topic").value)
+        self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
+        self.done = Event()
+        self.exit_code = 0
+        self.sub = self.create_subscription(
+            PointCloud2, self.input_topic, self._on_cloud, sensor_qos
+        )
+        self.get_logger().info(
+            f"Waiting for one {self.input_topic} message; will write to {self.output_dir}"
+        )
+
+    def _on_cloud(self, msg: PointCloud2) -> None:
+        if self.done.is_set():
+            return
+        try:
+            self._process(msg)
+        except Exception as exc:
+            self.get_logger().error(f"Snapshot failed: {exc}")
+            self.exit_code = 2
+        finally:
+            self.done.set()
+
+    def _process(self, msg: PointCloud2) -> None:
+        source_frame = msg.header.frame_id
+        self.get_logger().info(
+            f"Got cloud in frame '{source_frame}'; looking up transform to '{self.target_frame}'"
+        )
+        transform = self.tf_buffer.lookup_transform(
+            self.target_frame,
+            source_frame,
+            rclpy.time.Time(),
+            timeout=Duration(seconds=TF_TIMEOUT_SEC),
+        )
+        transformed = do_transform_cloud(msg, transform)
+        points = list(
+            point_cloud2.read_points(
+                transformed,
+                field_names=["x", "y", "z", "intensity"],
+                skip_nans=True,
+            )
+        )
+
+        pcd_path = self.output_dir / "pointcloud_map.pcd"
+        write_pcd_binary(pcd_path, points)
+        write_sidecars_if_absent(self.output_dir)
+        self.get_logger().info(
+            f"Wrote {len(points)} points to {pcd_path} and ensured sidecars exist"
+        )
+
+
+def main() -> int:
+    rclpy.init()
+    node = SnapshotNode()
+    try:
+        deadline = node.get_clock().now() + Duration(seconds=CLOUD_TIMEOUT_SEC)
+        while rclpy.ok() and not node.done.is_set():
+            if node.get_clock().now() > deadline:
+                node.get_logger().error(
+                    f"No message on {node.input_topic} within {CLOUD_TIMEOUT_SEC}s"
+                )
+                return 3
+            rclpy.spin_once(node, timeout_sec=0.1)
+        return node.exit_code
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
