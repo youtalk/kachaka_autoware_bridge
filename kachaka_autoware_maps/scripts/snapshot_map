@@ -74,7 +74,7 @@ class SnapshotNode(Node):
         self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
         self.tf_timeout_sec = float(self.get_parameter("tf_timeout").value)
         self.cloud_timeout_sec = float(self.get_parameter("cloud_timeout").value)
-        self.warmup_skip_frames = int(self.get_parameter("warmup_skip_frames").value)
+        self.warmup_skip_frames = max(0, int(self.get_parameter("warmup_skip_frames").value))
         self._frames_seen = 0
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -159,9 +159,16 @@ def main() -> int:
         deadline = node.get_clock().now() + Duration(seconds=node.cloud_timeout_sec)
         while rclpy.ok() and not node.done.is_set():
             if node.get_clock().now() > deadline:
-                node.get_logger().error(
-                    f"No message on {node.input_topic} within {node.cloud_timeout_sec}s"
-                )
+                if node._frames_seen == 0:
+                    node.get_logger().error(
+                        f"No message on {node.input_topic} within {node.cloud_timeout_sec}s"
+                    )
+                else:
+                    node.get_logger().error(
+                        f"Saw {node._frames_seen} warm-up frame(s) on {node.input_topic} "
+                        f"but did not reach frame {node.warmup_skip_frames + 1} within "
+                        f"{node.cloud_timeout_sec}s"
+                    )
                 return 3
             rclpy.spin_once(node, timeout_sec=0.1)
         if not node.done.is_set():
