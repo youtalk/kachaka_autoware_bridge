@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname or IP."/>
+  <arg name="metadata" default="/tmp/os1_metadata.json"
+       description="Path to ouster metadata cache."/>
+  <arg name="output_dir" default="$(env HOME)/maps/kachaka_pipeline_test"
+       description="Directory to write pointcloud_map.pcd and sidecars."/>
+  <arg name="target_frame" default="base_footprint"
+       description="Frame the saved cloud is expressed in."/>
+
+  <!-- Static TF chain base_footprint -> os_lidar.
+       use_joint_state_publisher:=true zeroes the dynamic joints (docking_link prismatic, wheels)
+       so the chain is complete without the kachaka_grpc_ros2_bridge running. -->
+  <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py">
+    <arg name="use_joint_state_publisher" value="true"/>
+  </include>
+
+  <!-- Ouster driver (publishes /ouster/points) -->
+  <include file="$(find-pkg-share ouster_ros)/launch/sensor.launch.xml">
+    <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
+    <arg name="metadata" value="$(var metadata)"/>
+  </include>
+
+  <!-- Snapshot capture; exits when the first cloud is processed -->
+  <node pkg="kachaka_autoware_maps" exec="snapshot_map" name="snapshot_map" output="screen">
+    <param name="output_dir" value="$(var output_dir)"/>
+    <param name="target_frame" value="$(var target_frame)"/>
+  </node>
+</launch>

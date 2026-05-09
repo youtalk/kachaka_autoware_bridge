@@ -4,17 +4,15 @@
        default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
 
   <!--
-    NOTE: autoware_core_planning.launch.xml only forwards vehicle_param_file to
-    behavior_velocity_planner / motion_velocity_planner; mission_planner,
-    path_generator, and velocity_smoother also dereference VehicleInfoUtils and
-    will throw "wheel_radius must be initialized" on startup. Fixing this
-    requires either a patch upstream or forking the planning launch into this
-    wrapper. Tracked for M4 live bring-up.
+    Use the local fork of autoware_core_planning's launch (see
+    _planning_core.launch.xml). The fork loads vehicle_info.param.yaml in
+    mission_planner / path_generator / velocity_smoother (upstream forwards
+    it only to behavior_velocity_planner / motion_velocity_planner) and
+    sources motion_velocity_planner's launch_modules from a yaml so an empty
+    list can be expressed (the upstream arg substitution into the param value
+    attribute can't represent "[]").
   -->
-  <include file="$(find-pkg-share autoware_core_planning)/launch/autoware_core_planning.launch.xml">
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_planning_core.launch.xml">
     <arg name="vehicle_param_file" value="$(var vehicle_info_param_file)"/>
-    <!-- ObstacleStop disabled for the MVP; re-enabled in M6 once perception
-         input is wired up. -->
-    <arg name="motion_velocity_planner_launch_modules" value="[]"/>
   </include>
 </launch>

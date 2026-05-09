@@ -27,6 +27,39 @@ Pass these paths to the `autoware_core_map.launch.xml` arguments
 `pointcloud_map_path`, `pointcloud_map_metadata_path`, `lanelet2_map_path`,
 and `map_projector_info_path`.
 
+## Quick path: stationary snapshot (pipeline shake-out only)
+
+For end-to-end launch verification before a real map exists, capture a
+single OS-1 frame from the robot's current standstill pose. The
+resulting map is **throwaway** — coverage is one viewpoint and Kachaka
+cannot meaningfully navigate with it. Replace with a SLAM-built map
+(sections 1–4 below) before driving.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros/jazzy/install/setup.bash
+ros2 launch kachaka_autoware_maps snapshot.launch.xml \
+  sensor_hostname:=os-122609004411.local \
+  output_dir:=$HOME/maps/kachaka_pipeline_test
+```
+
+The launch brings up `robot_description` (for the static
+`base_footprint → os_lidar` chain) and the Ouster driver, captures one
+`/ouster/points` message, transforms it to `base_footprint`, and writes:
+
+- `pointcloud_map.pcd` (always overwritten)
+- `pointcloud_map/metadata.yaml`, `lanelet2_map.osm`,
+  `map_projector_info.yaml` (only if absent — user edits to the
+  lanelet2 file are preserved on re-snapshot)
+
+Then bring up the integrated launch with the throwaway map:
+
+```bash
+ros2 launch kachaka_autoware_bridge kachaka_autoware.launch.xml \
+  sensor_hostname:=os-122609004411.local \
+  map_path:=$HOME/maps/kachaka_pipeline_test
+```
+
 ## 1. pointcloud_map.pcd
 
 Run a 3D SLAM pipeline using the OS-1 alone. The recommended tool is

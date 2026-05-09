@@ -3,7 +3,7 @@
   <!--
     Simplified Ouster OS-1 (128) model.
     body: cylinder (diameter 85 mm, height 73.5 mm).
-    os1_lidar / os1_imu frame offsets follow the Ouster ICD.
+    Lidar / IMU frame offsets follow the Ouster ICD.
     Can be replaced by the official ouster_description if it becomes available.
   -->
   <xacro:macro name="ouster_os1"

@@ -3,12 +3,23 @@
 <package format="3">
   <name>kachaka_autoware_maps</name>
   <version>0.0.0</version>
-  <description>Documentation and helper layout for Kachaka Autoware map preparation (M0). Map files themselves live outside the repository.</description>
+  <description>Helpers for Kachaka Autoware map preparation: stationary snapshot tool that writes a complete throwaway map directory (PCD + minimum lanelet2 + sidecars). Real maps live outside the repository.</description>
   <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
   <license>Apache License 2.0</license>
   <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>ouster_ros</exec_depend>
+  <exec_depend>kachaka_autoware_description</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

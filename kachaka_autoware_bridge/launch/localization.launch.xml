@@ -14,5 +14,13 @@
     <arg name="pose_initializer_param_path"
          value="$(find-pkg-share kachaka_autoware_bridge)/config/pose_initializer.param.yaml"/>
     <arg name="lidar_input_topic" value="/sensing/lidar/top/pointcloud_raw_ex"/>
+    <!--
+      autoware_core_localization ships an older copy of ekf_localizer.param.yaml
+      that is missing diagnostics.diagnostics_publish_frequency. The upstream
+      autoware_ekf_localizer package config has the complete schema, so point
+      directly at it. Drop this override once autoware_core_localization re-syncs.
+    -->
+    <arg name="ekf_localizer_param_path"
+         value="$(find-pkg-share autoware_ekf_localizer)/config/ekf_localizer.param.yaml"/>
   </include>
 </launch>
