@@ -34,6 +34,12 @@ DEFAULT_TF_TIMEOUT_SEC = 5.0
 # Default 60 s tolerates the Ouster driver's ~30 s sensor handshake when the
 # driver is brought up alongside this node in the same launch.
 DEFAULT_CLOUD_TIMEOUT_SEC = 60.0
+# Skip this many clouds before capturing. The very first PointCloud2 the
+# Ouster driver emits after handshake has an elevated NaN ratio (incomplete
+# UDP packet reception during buffer warm-up); subsequent frames stabilize
+# at ~82% valid almost immediately. Empirically the first frame contained
+# ~16k valid points vs. ~107k from frame ~5 onward (same physical scene).
+DEFAULT_WARMUP_SKIP_FRAMES = 5
 
 
 def _tf_to_matrix(transform_stamped):
@@ -61,12 +67,15 @@ class SnapshotNode(Node):
         self.declare_parameter("output_dir", DEFAULT_OUTPUT_DIR)
         self.declare_parameter("tf_timeout", DEFAULT_TF_TIMEOUT_SEC)
         self.declare_parameter("cloud_timeout", DEFAULT_CLOUD_TIMEOUT_SEC)
+        self.declare_parameter("warmup_skip_frames", DEFAULT_WARMUP_SKIP_FRAMES)
 
         self.target_frame = str(self.get_parameter("target_frame").value)
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
         self.tf_timeout_sec = float(self.get_parameter("tf_timeout").value)
         self.cloud_timeout_sec = float(self.get_parameter("cloud_timeout").value)
+        self.warmup_skip_frames = max(0, int(self.get_parameter("warmup_skip_frames").value))
+        self._frames_seen = 0
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -83,11 +92,18 @@ class SnapshotNode(Node):
             PointCloud2, self.input_topic, self._on_cloud, sensor_qos
         )
         self.get_logger().info(
-            f"Waiting for one {self.input_topic} message; will write to {self.output_dir}"
+            f"Waiting on {self.input_topic} (skipping {self.warmup_skip_frames} warm-up frames); "
+            f"will write to {self.output_dir}"
         )
 
     def _on_cloud(self, msg: PointCloud2) -> None:
         if self.done.is_set():
+            return
+        self._frames_seen += 1
+        if self._frames_seen <= self.warmup_skip_frames:
+            self.get_logger().debug(
+                f"warm-up: skipping frame {self._frames_seen}/{self.warmup_skip_frames}"
+            )
             return
         try:
             self._process(msg)
@@ -143,9 +159,16 @@ def main() -> int:
         deadline = node.get_clock().now() + Duration(seconds=node.cloud_timeout_sec)
         while rclpy.ok() and not node.done.is_set():
             if node.get_clock().now() > deadline:
-                node.get_logger().error(
-                    f"No message on {node.input_topic} within {node.cloud_timeout_sec}s"
-                )
+                if node._frames_seen == 0:
+                    node.get_logger().error(
+                        f"No message on {node.input_topic} within {node.cloud_timeout_sec}s"
+                    )
+                else:
+                    node.get_logger().error(
+                        f"Saw {node._frames_seen} warm-up frame(s) on {node.input_topic} "
+                        f"but did not reach frame {node.warmup_skip_frames + 1} within "
+                        f"{node.cloud_timeout_sec}s"
+                    )
                 return 3
             rclpy.spin_once(node, timeout_sec=0.1)
         if not node.done.is_set():
