@@ -25,8 +25,11 @@
     <origin xyz="0 0 0.115" rpy="0 0 0"/>
   </xacro:shelf_3tier>
 
-  <!-- Mount the Ouster OS-1 at the shelf top center; override origin with values measured in M0 Task 4. -->
-  <xacro:ouster_os1 parent="shelf_top">
+  <!-- Mount the Ouster OS-1 at the shelf top center; override origin with values measured in M0 Task 4.
+       name="os" so URDF link names (os_sensor / os_lidar / os_imu) match the ouster_ros driver's default
+       sensor_frame / lidar_frame / imu_frame; otherwise the published cloud's frame_id is unconnected
+       to the robot TF tree and downstream NDT / snapshot tools fail to look up the transform. -->
+  <xacro:ouster_os1 parent="shelf_top" name="os">
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:ouster_os1>
 
