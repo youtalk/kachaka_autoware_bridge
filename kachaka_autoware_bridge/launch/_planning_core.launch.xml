@@ -1,3 +1,4 @@
+<?xml version="1.0"?>
 <launch>
   <!--
     Local fork of autoware_core_planning/launch/autoware_core_planning.launch.xml
@@ -81,7 +82,7 @@
       <node pkg="autoware_behavior_velocity_planner" exec="autoware_behavior_velocity_planner_node" name="behavior_velocity_planner">
         <!-- topic remap -->
         <remap from="~/input/path_with_lane_id" to="/planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id"/>
-        <remap from="~/input/vector_map" to="/map/vector_map"/>
+        <remap from="~/input/vector_map" to="$(var map_topic_name)"/>
         <remap from="~/input/vehicle_odometry" to="/localization/kinematic_state"/>
         <remap from="~/input/accel" to="/localization/acceleration"/>
         <remap from="~/input/dynamic_objects" to="/perception/object_recognition/objects"/>
@@ -119,7 +120,7 @@
       <node pkg="autoware_motion_velocity_planner" exec="autoware_motion_velocity_planner_node" name="motion_velocity_planner">
         <!-- topic remap -->
         <remap from="~/input/trajectory" to="path_optimizer/trajectory"/>
-        <remap from="~/input/vector_map" to="/map/vector_map"/>
+        <remap from="~/input/vector_map" to="$(var map_topic_name)"/>
         <remap from="~/input/vehicle_odometry" to="/localization/kinematic_state"/>
         <remap from="~/input/accel" to="/localization/acceleration"/>
         <remap from="~/input/dynamic_objects" to="/perception/object_recognition/objects"/>
