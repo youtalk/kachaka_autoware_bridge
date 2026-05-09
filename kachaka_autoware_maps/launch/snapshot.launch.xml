@@ -9,8 +9,12 @@
   <arg name="target_frame" default="base_footprint"
        description="Frame the saved cloud is expressed in."/>
 
-  <!-- Static TF chain base_footprint -> os_lidar -->
-  <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py"/>
+  <!-- Static TF chain base_footprint -> os_lidar.
+       use_joint_state_publisher:=true zeroes the dynamic joints (docking_link prismatic, wheels)
+       so the chain is complete without the kachaka_grpc_ros2_bridge running. -->
+  <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py">
+    <arg name="use_joint_state_publisher" value="true"/>
+  </include>
 
   <!-- Ouster driver (publishes /ouster/points) -->
   <include file="$(find-pkg-share ouster_ros)/launch/sensor.launch.xml">

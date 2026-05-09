@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from threading import Event
 
+import numpy as np
 import rclpy
 import rclpy.time
 import tf2_ros
@@ -22,7 +23,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
-from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 
 from kachaka_autoware_maps.pcd_io import write_pcd_binary
 from kachaka_autoware_maps.sidecars import write_sidecars_if_absent
@@ -30,8 +30,27 @@ from kachaka_autoware_maps.sidecars import write_sidecars_if_absent
 DEFAULT_TARGET_FRAME = "base_footprint"
 DEFAULT_INPUT_TOPIC = "/ouster/points"
 DEFAULT_OUTPUT_DIR = str(Path.home() / "maps" / "kachaka_pipeline_test")
-TF_TIMEOUT_SEC = 5.0
-CLOUD_TIMEOUT_SEC = 15.0
+DEFAULT_TF_TIMEOUT_SEC = 5.0
+# Default 60 s tolerates the Ouster driver's ~30 s sensor handshake when the
+# driver is brought up alongside this node in the same launch.
+DEFAULT_CLOUD_TIMEOUT_SEC = 60.0
+
+
+def _tf_to_matrix(transform_stamped):
+    """Return (R 3x3, t 3) from a geometry_msgs/TransformStamped."""
+    t = transform_stamped.transform.translation
+    q = transform_stamped.transform.rotation
+    qx, qy, qz, qw = q.x, q.y, q.z, q.w
+    # Right-handed quaternion to rotation matrix.
+    r = np.array(
+        [
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+        ],
+        dtype=np.float32,
+    )
+    return r, np.array([t.x, t.y, t.z], dtype=np.float32)
 
 
 class SnapshotNode(Node):
@@ -40,10 +59,14 @@ class SnapshotNode(Node):
         self.declare_parameter("target_frame", DEFAULT_TARGET_FRAME)
         self.declare_parameter("input_topic", DEFAULT_INPUT_TOPIC)
         self.declare_parameter("output_dir", DEFAULT_OUTPUT_DIR)
+        self.declare_parameter("tf_timeout", DEFAULT_TF_TIMEOUT_SEC)
+        self.declare_parameter("cloud_timeout", DEFAULT_CLOUD_TIMEOUT_SEC)
 
         self.target_frame = str(self.get_parameter("target_frame").value)
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
+        self.tf_timeout_sec = float(self.get_parameter("tf_timeout").value)
+        self.cloud_timeout_sec = float(self.get_parameter("cloud_timeout").value)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -83,22 +106,33 @@ class SnapshotNode(Node):
             self.target_frame,
             source_frame,
             rclpy.time.Time(),
-            timeout=Duration(seconds=TF_TIMEOUT_SEC),
-        )
-        transformed = do_transform_cloud(msg, transform)
-        points = list(
-            point_cloud2.read_points(
-                transformed,
-                field_names=["x", "y", "z", "intensity"],
-                skip_nans=True,
-            )
+            timeout=Duration(seconds=self.tf_timeout_sec),
         )
 
+        # Read points from the original cloud (avoids tf2_sensor_msgs.do_transform_cloud,
+        # which fails on Ouster's structured PointCloud2 due to dtype mismatch on the
+        # extra fields like t / ring / range).
+        raw = point_cloud2.read_points(
+            msg, field_names=["x", "y", "z", "intensity"], skip_nans=True
+        )
+        xyzi = np.asarray(raw.tolist(), dtype=np.float32)
+        if xyzi.size == 0:
+            transformed_points: list[tuple[float, float, float, float]] = []
+        else:
+            xyz = xyzi[:, :3]
+            intensity = xyzi[:, 3]
+            r_mat, t_vec = _tf_to_matrix(transform)
+            xyz_t = xyz @ r_mat.T + t_vec
+            transformed_points = [
+                (float(p[0]), float(p[1]), float(p[2]), float(i))
+                for p, i in zip(xyz_t, intensity)
+            ]
+
         pcd_path = self.output_dir / "pointcloud_map.pcd"
-        write_pcd_binary(pcd_path, points)
+        write_pcd_binary(pcd_path, transformed_points)
         write_sidecars_if_absent(self.output_dir)
         self.get_logger().info(
-            f"Wrote {len(points)} points to {pcd_path} and ensured sidecars exist"
+            f"Wrote {len(transformed_points)} points to {pcd_path} and ensured sidecars exist"
         )
 
 
@@ -106,11 +140,11 @@ def main() -> int:
     rclpy.init()
     node = SnapshotNode()
     try:
-        deadline = node.get_clock().now() + Duration(seconds=CLOUD_TIMEOUT_SEC)
+        deadline = node.get_clock().now() + Duration(seconds=node.cloud_timeout_sec)
         while rclpy.ok() and not node.done.is_set():
             if node.get_clock().now() > deadline:
                 node.get_logger().error(
-                    f"No message on {node.input_topic} within {CLOUD_TIMEOUT_SEC}s"
+                    f"No message on {node.input_topic} within {node.cloud_timeout_sec}s"
                 )
                 return 3
             rclpy.spin_once(node, timeout_sec=0.1)
