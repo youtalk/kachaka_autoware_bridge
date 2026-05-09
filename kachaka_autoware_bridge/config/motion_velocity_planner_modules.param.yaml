@@ -1,0 +1,18 @@
+# Module list for autoware_motion_velocity_planner.
+#
+# Even though the integration design spec §7 calls for an empty list
+# until perception is wired up in M6, autoware_motion_velocity_planner
+# rejects an empty launch_modules (declare_parameter throws
+# "parameter_value_from failed for parameter 'launch_modules': No parameter
+# value set"; ros2 launch's --params-file does not deliver `[]` to a
+# strongly-typed `vector<string>` declaration). ObstacleStopModule is the
+# minimum-friction stand-in: with perception topics unpublished it sits
+# idle and never produces a stop command, so the node starts and the
+# trajectory chain stays connected without changing runtime behavior.
+#
+# This file lives outside _planning_core.launch.xml because the value
+# cannot be expressed via a `<param value="..."/>` substitution.
+
+/**:
+  ros__parameters:
+    launch_modules: ["autoware::motion_velocity_planner::ObstacleStopModule"]
