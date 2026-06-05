@@ -7,7 +7,7 @@
     lanelet2 loader + projection loader + visualizer. lanelet2_map_loader
     publishes /map/vector_map (the visualizer remaps input/lanelet2_map ->
     vector_map inside the 'map' namespace), exactly what planning consumes.
-    Re-sync the node list / param paths with autoware_core_map when it is bumped.
+    Re-sync the node list / param paths / allow_substs variable names with autoware_core_map when it is bumped.
   -->
   <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
        description="Directory holding lanelet2_map.osm + map_projector_info.yaml"/>

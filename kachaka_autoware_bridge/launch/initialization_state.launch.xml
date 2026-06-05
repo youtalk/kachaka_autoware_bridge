@@ -6,8 +6,10 @@
     to publish it; AD-API routing readiness needs it.
   -->
   <arg name="topic" default="/localization/initialization_state"/>
+  <arg name="publish_period" default="1.0"/>
   <node pkg="kachaka_autoware_bridge" exec="publish_initialization_state"
         name="publish_initialization_state" output="screen">
     <param name="topic" value="$(var topic)"/>
+    <param name="publish_period" value="$(var publish_period)"/>
   </node>
 </launch>
