@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    Lanelet-only map bring-up for the stock (no 3D LiDAR) path. The upstream
+    autoware_core_map.launch.xml always starts autoware_pointcloud_map_loader,
+    which the stock path has no .pcd for, so this launch starts only the
+    lanelet2 loader + projection loader + visualizer. lanelet2_map_loader
+    publishes /map/vector_map (the visualizer remaps input/lanelet2_map ->
+    vector_map inside the 'map' namespace), exactly what planning consumes.
+    Re-sync the node list / param paths / allow_substs variable names with autoware_core_map when it is bumped.
+  -->
+  <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
+       description="Directory holding lanelet2_map.osm + map_projector_info.yaml"/>
+  <arg name="lanelet2_map_path" default="$(var map_path)/lanelet2_map.osm"/>
+  <arg name="map_projector_info_path" default="$(var map_path)/map_projector_info.yaml"/>
+  <arg name="lanelet2_map_loader_param_path"
+       default="$(find-pkg-share autoware_core_map)/config/lanelet2_map_loader.param.yaml"/>
+  <arg name="map_projection_loader_param_path"
+       default="$(find-pkg-share autoware_core_map)/config/map_projection_loader.param.yaml"/>
+
+  <group>
+    <push-ros-namespace namespace="map"/>
+
+    <node pkg="autoware_map_loader" exec="autoware_lanelet2_map_loader" name="lanelet2_map_loader">
+      <param from="$(var lanelet2_map_loader_param_path)" allow_substs="true"/>
+    </node>
+
+    <node pkg="autoware_map_projection_loader" exec="autoware_map_projection_loader_node" name="map_projection_loader">
+      <param from="$(var map_projection_loader_param_path)" allow_substs="true"/>
+    </node>
+
+    <node pkg="autoware_lanelet2_map_visualizer" exec="autoware_lanelet2_map_visualizer" name="lanelet2_map_visualization" output="both">
+      <remap from="input/lanelet2_map" to="vector_map"/>
+      <remap from="output/lanelet2_map_marker" to="vector_map_marker"/>
+    </node>
+  </group>
+</launch>

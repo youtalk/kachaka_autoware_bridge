@@ -36,8 +36,8 @@ cannot meaningfully navigate with it. Replace with a SLAM-built map
 (sections 1–4 below) before driving.
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/ros/jazzy/install/setup.bash
+source /opt/ros/jazzy/setup.zsh
+source ~/ros/jazzy/install/setup.zsh
 ros2 launch kachaka_autoware_maps snapshot.launch.xml \
   sensor_hostname:=os-122609004411.local \
   output_dir:=$HOME/maps/kachaka_pipeline_test
@@ -95,3 +95,37 @@ pointcloud_map.pcd: [0, 0]
 The map filename in the metadata must match the actual PCD file in the
 layout above. Refer to the `autoware_map_loader` documentation for the
 full schema if you later split the map into multiple tiles.
+
+## Stock path: circular loop map (no 3D LiDAR)
+
+For the stock Kachaka (no Ouster), the planning map is a **circular one-way
+loop** generated from Kachaka's own 2D occupancy map. The tool snapshots
+`/kachaka/mapping/map`, finds the largest free rectangle, and fits the largest
+circle that leaves lane + margin clearance inside it.
+
+```bash
+source /opt/ros/jazzy/setup.zsh
+source ~/ros/jazzy/install/setup.zsh
+source install/setup.zsh
+# Bridge up + robot OFF the dock so the body LiDAR is mapping:
+ros2 launch kachaka_autoware_maps generate_loop_map.launch.xml \
+  output_dir:=$HOME/maps/kachaka_loop
+```
+
+Writes `lanelet2_map.osm`, `map_projector_info.yaml`, and `loop_params.yaml`
+(centre/radius for downstream tools). Tunable parameters: `lane_width` (0.6 m),
+`max_radius` (0.9 m cap), `margin` (0.05 m), `num_segments` (16), `speed_limit`
+(0.3 m/s). The projector is `Local`, so lanelet `local_x`/`local_y` are
+map-frame metres aligned with Kachaka's map origin. Loop smoothness is
+controlled by `num_segments` (more segments = smoother circle), **not** by the
+map loader's centerline resolution — increase `num_segments` if pure-pursuit
+chatters on the arcs.
+
+Then bring up planning against it:
+
+```bash
+ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
+  server_uri:=192.168.1.101:26400 \
+  launch_planning:=true launch_api:=true \
+  map_path:=$HOME/maps/kachaka_loop
+```

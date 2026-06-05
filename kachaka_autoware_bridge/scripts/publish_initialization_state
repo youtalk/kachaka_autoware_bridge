@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Publish a latched LocalizationInitializationState=INITIALIZED.
+
+The stock Kachaka is always localized by its own SLAM (map->odom), so there is
+no NDT pose_initializer to publish /localization/initialization_state. AD-API's
+localization node and routing readiness consume that topic, so this node asserts
+INITIALIZED directly. Transient-local + periodic re-publish so a late or
+restarted AD-API node still receives it.
+"""
+
+import sys
+
+import rclpy
+from autoware_adapi_v1_msgs.msg import LocalizationInitializationState
+from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+
+
+class InitializationStatePublisher(Node):
+    def __init__(self) -> None:
+        super().__init__("publish_initialization_state")
+        self.declare_parameter("topic", "/localization/initialization_state")
+        self.declare_parameter("publish_period", 1.0)
+        topic = str(self.get_parameter("topic").value)
+        period = float(self.get_parameter("publish_period").value)
+
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.pub = self.create_publisher(LocalizationInitializationState, topic, qos)
+        self._publish()  # latch immediately for subscribers already present
+        self.create_timer(period, self._publish)
+        self.get_logger().info(
+            f"Publishing INITIALIZED on {topic} (latched, every {period:.1f}s)"
+        )
+
+    def _publish(self) -> None:
+        msg = LocalizationInitializationState()
+        msg.stamp = self.get_clock().now().to_msg()
+        msg.state = LocalizationInitializationState.INITIALIZED
+        self.pub.publish(msg)
+
+
+def main() -> int:
+    rclpy.init()
+    node = InitializationStatePublisher()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

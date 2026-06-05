@@ -3,7 +3,7 @@
 <package format="3">
   <name>kachaka_autoware_maps</name>
   <version>0.0.0</version>
-  <description>Helpers for Kachaka Autoware map preparation: stationary snapshot tool that writes a complete throwaway map directory (PCD + minimum lanelet2 + sidecars). Real maps live outside the repository.</description>
+  <description>Helpers for Kachaka Autoware map preparation: stationary 3D-LiDAR snapshot tool (PCD + minimum lanelet2 + sidecars) and a stock circular loop-map generator that builds a one-way lanelet2 map from Kachaka's 2D occupancy grid without any external LiDAR. Real maps live outside the repository.</description>
   <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
   <license>Apache License 2.0</license>
   <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
@@ -18,6 +18,7 @@
   <exec_depend>sensor_msgs_py</exec_depend>
   <exec_depend>ouster_ros</exec_depend>
   <exec_depend>kachaka_autoware_description</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
 
