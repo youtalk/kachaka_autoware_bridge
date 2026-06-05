@@ -87,7 +87,7 @@ class SetLoopRouteNode(Node):
             rclpy.spin_until_future_complete(self, fut, timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC)
 
         if not self.set_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
-            self.get_logger().error(f"{DEFAULT_SET_SERVICE} unavailable; is AD-API up?")
+            self.get_logger().error(f"{self.set_cli.srv_name} unavailable; is AD-API up?")
             return False
 
         req = SetRoutePoints.Request()
@@ -119,16 +119,22 @@ class SetLoopRouteNode(Node):
 
 def main() -> int:
     rclpy.init()
-    node = SetLoopRouteNode()
+    node = None
     try:
+        node = SetLoopRouteNode()
         if not node.wait_for_odom():
             return 1
         return 0 if node.call() else 1
-    except (FileNotFoundError, KeyError, ValueError) as exc:
-        node.get_logger().error(f"set_loop_route: {exc}")
+    except (FileNotFoundError, yaml.YAMLError, KeyError, TypeError, ValueError) as exc:
+        msg = f"set_loop_route: {exc}"
+        if node is not None:
+            node.get_logger().error(msg)
+        else:
+            print(msg, file=sys.stderr)
         return 1
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 
