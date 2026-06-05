@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    Publish /localization/initialization_state = INITIALIZED for the stock path.
+    Kachaka is always localized (SLAM map->odom), so there is no pose_initializer
+    to publish it; AD-API routing readiness needs it.
+  -->
+  <arg name="topic" default="/localization/initialization_state"/>
+  <node pkg="kachaka_autoware_bridge" exec="publish_initialization_state"
+        name="publish_initialization_state" output="screen">
+    <param name="topic" value="$(var topic)"/>
+  </node>
+</launch>
