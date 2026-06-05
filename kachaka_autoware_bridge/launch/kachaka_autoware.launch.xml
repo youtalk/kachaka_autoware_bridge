@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="server_uri" default="192.168.1.91:26400" description="Kachaka gRPC URI"/>
+  <arg name="server_uri" default="192.168.1.101:26400" description="Kachaka gRPC URI (DHCP; override per session)"/>
   <!--
     The 'kachaka' namespace is currently hardcoded. The Vehicle Interface and
     several Autoware Core launches reference Kachaka topics by absolute path
