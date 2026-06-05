@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    VERIFICATION TOOL (M2): publish a short straight-ahead /planning/trajectory
+    so the control chain (simple_pure_pursuit -> /control/command/control_cmd ->
+    vehicle interface -> /kachaka/manual_control/cmd_vel) can be exercised before
+    the real planner (M3) exists. Run AFTER kachaka_autoware_2d.launch.xml is up,
+    the robot is OFF the dock, and localization is publishing. The robot only
+    moves once operation mode is switched to AUTONOMOUS (change_to_autonomous).
+    Keep length within the small Kachaka home map (~6.9 x 4.35 m).
+  -->
+  <arg name="length" default="1.0" description="Forward path length in metres."/>
+  <arg name="spacing" default="0.1" description="Point spacing in metres (>0)."/>
+  <arg name="velocity" default="0.2"
+       description="Per-point target speed (m/s); the vehicle interface clamps to max_linear_velocity."/>
+
+  <node pkg="kachaka_autoware_bridge" exec="publish_canned_trajectory"
+        name="publish_canned_trajectory" output="screen">
+    <param name="length" value="$(var length)"/>
+    <param name="spacing" value="$(var spacing)"/>
+    <param name="velocity" value="$(var velocity)"/>
+  </node>
+</launch>

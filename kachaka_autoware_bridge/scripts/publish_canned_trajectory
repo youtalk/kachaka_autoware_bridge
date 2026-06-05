@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Publish a short straight-ahead /planning/trajectory for M2 control bring-up.
+
+Waits for one /localization/kinematic_state to capture the robot's current
+map-frame pose, builds a fixed straight trajectory ahead of it, then republishes
+that SAME trajectory at a steady rate. autoware_simple_pure_pursuit consumes the
+trajectory with a polling (volatile, depth-1) subscriber, so a one-shot publish
+can be missed; a steady republish is reliable. The trajectory is fixed (not
+regenerated per tick) so the robot drives to a fixed goal and the controller's
+goal-stop halts it, instead of chasing a moving carrot.
+
+VERIFICATION TOOL for M2 only; M3 replaces it with the real planner. The robot
+moves only after operation mode is switched to AUTONOMOUS (the vehicle interface
+gates control_cmd).
+"""
+
+import math
+import sys
+
+import rclpy
+from autoware_planning_msgs.msg import Trajectory, TrajectoryPoint
+from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
+from rclpy.node import Node
+
+from kachaka_autoware_bridge.trajectory_gen import (
+    generate_straight_trajectory,
+    yaw_to_quaternion,
+)
+
+DEFAULT_ODOM_TOPIC = "/localization/kinematic_state"
+DEFAULT_TRAJ_TOPIC = "/planning/trajectory"
+DEFAULT_LENGTH = 1.0
+DEFAULT_SPACING = 0.1
+DEFAULT_VELOCITY = 0.2
+DEFAULT_PUBLISH_RATE = 10.0
+DEFAULT_ODOM_TIMEOUT_SEC = 30.0
+
+
+def _yaw_from_quaternion(z: float, w: float) -> float:
+    """Planar yaw from a (z, w) quaternion (x == y == 0 for a flat-floor pose)."""
+    return 2.0 * math.atan2(z, w)
+
+
+class CannedTrajectoryNode(Node):
+    def __init__(self) -> None:
+        super().__init__("publish_canned_trajectory")
+        self.declare_parameter("odom_topic", DEFAULT_ODOM_TOPIC)
+        self.declare_parameter("trajectory_topic", DEFAULT_TRAJ_TOPIC)
+        self.declare_parameter("length", DEFAULT_LENGTH)
+        self.declare_parameter("spacing", DEFAULT_SPACING)
+        self.declare_parameter("velocity", DEFAULT_VELOCITY)
+        self.declare_parameter("publish_rate", DEFAULT_PUBLISH_RATE)
+        self.declare_parameter("odom_timeout", DEFAULT_ODOM_TIMEOUT_SEC)
+
+        self.odom_topic = str(self.get_parameter("odom_topic").value)
+        self.traj_topic = str(self.get_parameter("trajectory_topic").value)
+        self.length = float(self.get_parameter("length").value)
+        self.spacing = float(self.get_parameter("spacing").value)
+        self.velocity = float(self.get_parameter("velocity").value)
+        self.publish_rate = float(self.get_parameter("publish_rate").value)
+        self.odom_timeout_sec = float(self.get_parameter("odom_timeout").value)
+
+        if self.publish_rate <= 0.0:
+            raise ValueError(f"publish_rate must be > 0, got {self.publish_rate}")
+
+        self.trajectory: Trajectory | None = None
+        self.build_error: str | None = None
+        self.pub = self.create_publisher(Trajectory, self.traj_topic, 1)
+        self.odom_sub = self.create_subscription(
+            Odometry, self.odom_topic, self._on_odom, 1
+        )
+        self.get_logger().info(
+            f"Waiting for {self.odom_topic} to capture the start pose..."
+        )
+
+    def _on_odom(self, msg: Odometry) -> None:
+        if self.trajectory is not None or self.build_error is not None:
+            return
+        try:
+            trajectory = self._build_trajectory(msg)
+        except ValueError as exc:
+            # Bad geometry parameters (e.g. spacing > length) can only be
+            # detected here, once a pose is available. Record the failure so
+            # main() reports it clearly instead of a misleading odom timeout.
+            self.build_error = str(exc)
+            self.get_logger().fatal(f"Cannot build trajectory: {exc}")
+            return
+        self.trajectory = trajectory
+        self.create_timer(1.0 / self.publish_rate, self._on_publish_timer)
+        self.get_logger().info(
+            f"Captured start pose in frame '{msg.header.frame_id}'; republishing "
+            f"{len(self.trajectory.points)}-point trajectory on {self.traj_topic} "
+            f"at {self.publish_rate:.0f} Hz (length={self.length} m, "
+            f"velocity={self.velocity} m/s)"
+        )
+
+    def _build_trajectory(self, odom: Odometry) -> Trajectory:
+        pose = odom.pose.pose
+        yaw = _yaw_from_quaternion(pose.orientation.z, pose.orientation.w)
+        planar_points = generate_straight_trajectory(
+            pose.position.x,
+            pose.position.y,
+            yaw,
+            self.length,
+            self.spacing,
+            self.velocity,
+        )
+        trajectory = Trajectory()
+        # Pure-pursuit works in the odometry pose frame (map); keep them aligned.
+        trajectory.header.frame_id = odom.header.frame_id
+        for planar in planar_points:
+            point = TrajectoryPoint()
+            point.pose.position.x = planar.x
+            point.pose.position.y = planar.y
+            qz, qw = yaw_to_quaternion(planar.yaw)
+            point.pose.orientation.z = qz
+            point.pose.orientation.w = qw
+            point.longitudinal_velocity_mps = float(planar.velocity_mps)
+            trajectory.points.append(point)
+        return trajectory
+
+    def _on_publish_timer(self) -> None:
+        if self.trajectory is None:
+            return
+        self.trajectory.header.stamp = self.get_clock().now().to_msg()
+        self.pub.publish(self.trajectory)
+
+
+def main() -> int:
+    rclpy.init()
+    node = None
+    try:
+        node = CannedTrajectoryNode()
+        deadline = node.get_clock().now() + Duration(seconds=node.odom_timeout_sec)
+        while (
+            rclpy.ok()
+            and node.trajectory is None
+            and node.build_error is None
+        ):
+            if node.get_clock().now() > deadline:
+                node.get_logger().error(
+                    f"No {node.odom_topic} within {node.odom_timeout_sec}s; "
+                    "is localization (M1) up and the robot off the dock?"
+                )
+                return 1
+            rclpy.spin_once(node, timeout_sec=0.1)
+        if node.build_error is not None:
+            return 1
+        if rclpy.ok() and node.trajectory is not None:
+            node.get_logger().info("Publishing canned trajectory; Ctrl-C to stop.")
+            rclpy.spin(node)
+    except ValueError as exc:
+        # Invalid construction parameters (e.g. publish_rate <= 0).
+        print(f"publish_canned_trajectory: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
