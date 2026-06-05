@@ -13,7 +13,9 @@ endif()
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-ament_auto_add_library(${PROJECT_NAME} SHARED
+ament_auto_add_library(
+  ${PROJECT_NAME}
+  SHARED
   src/kinematic_state_converter.cpp
   src/localization_bridge_node.cpp)
 
@@ -22,9 +24,12 @@ target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_kinematic_state_converter
-                  test/test_kinematic_state_converter.cpp)
+  ament_add_gtest(test_kinematic_state_converter test/test_kinematic_state_converter.cpp)
   target_link_libraries(test_kinematic_state_converter ${PROJECT_NAME})
 endif()
 
-ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR INSTALL_TO_SHARE launch config)
+ament_auto_package(
+  USE_SCOPED_HEADER_INSTALL_DIR
+  INSTALL_TO_SHARE
+  launch
+  config)

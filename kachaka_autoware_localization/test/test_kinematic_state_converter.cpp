@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-
 #include <geometry_msgs/msg/transform.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <gtest/gtest.h>
 
 #include "kachaka_autoware_localization/kinematic_state_converter.hpp"
 
@@ -41,8 +40,9 @@ TEST(KinematicStateConverter, SetsFramesAndStamp) {
   builtin_interfaces::msg::Time stamp;
   stamp.sec = 123;
   stamp.nanosec = 456;
-  const auto odom = ToKinematicState(stamp, geometry_msgs::msg::Transform(),
-                                     geometry_msgs::msg::Twist(), make_params());
+  const auto odom =
+      ToKinematicState(stamp, geometry_msgs::msg::Transform(),
+                       geometry_msgs::msg::Twist(), make_params());
   EXPECT_EQ(odom.header.frame_id, "map");
   EXPECT_EQ(odom.child_frame_id, "base_link");
   EXPECT_EQ(odom.header.stamp.sec, 123);
@@ -56,8 +56,9 @@ TEST(KinematicStateConverter, CopiesPoseFromTransform) {
   tf.translation.z = 0.0;
   tf.rotation.z = 0.7071068;
   tf.rotation.w = 0.7071068;
-  const auto odom = ToKinematicState(builtin_interfaces::msg::Time(), tf,
-                                     geometry_msgs::msg::Twist(), make_params());
+  const auto odom =
+      ToKinematicState(builtin_interfaces::msg::Time(), tf,
+                       geometry_msgs::msg::Twist(), make_params());
   EXPECT_DOUBLE_EQ(odom.pose.pose.position.x, 1.5);
   EXPECT_DOUBLE_EQ(odom.pose.pose.position.y, -2.5);
   EXPECT_DOUBLE_EQ(odom.pose.pose.position.z, 0.0);
@@ -80,10 +81,9 @@ TEST(KinematicStateConverter, CopiesTwist) {
 }
 
 TEST(KinematicStateConverter, FillsCovarianceDiagonal) {
-  const auto odom =
-      ToKinematicState(builtin_interfaces::msg::Time(),
-                       geometry_msgs::msg::Transform(),
-                       geometry_msgs::msg::Twist(), make_params());
+  const auto odom = ToKinematicState(
+      builtin_interfaces::msg::Time(), geometry_msgs::msg::Transform(),
+      geometry_msgs::msg::Twist(), make_params());
   EXPECT_DOUBLE_EQ(odom.pose.covariance[0], 0.01);    // x
   EXPECT_DOUBLE_EQ(odom.pose.covariance[7], 0.01);    // y
   EXPECT_DOUBLE_EQ(odom.pose.covariance[35], 0.02);   // yaw
