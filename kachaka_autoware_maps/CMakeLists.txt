@@ -6,7 +6,8 @@ find_package(ament_cmake_python REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
 
-install(PROGRAMS scripts/snapshot_map scripts/generate_loop_map DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/snapshot_map scripts/generate_loop_map
+        DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
