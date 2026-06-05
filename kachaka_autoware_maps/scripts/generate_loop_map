@@ -93,7 +93,7 @@ class GenerateLoopMapNode(Node):
         info = msg.info
         q = info.origin.orientation
         if abs(q.z) > 1e-3 or abs(q.w - 1.0) > 1e-3:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 "OccupancyGrid origin is rotated; loop placement assumes an "
                 "axis-aligned grid and ignores the rotation."
             )
@@ -138,6 +138,11 @@ def main() -> int:
                 )
                 return 3
             rclpy.spin_once(node, timeout_sec=0.1)
+        if not node.done.is_set():
+            node.get_logger().warning(
+                "Interrupted before the map was received; no output written."
+            )
+            return 1
         return node.exit_code
     finally:
         node.destroy_node()
