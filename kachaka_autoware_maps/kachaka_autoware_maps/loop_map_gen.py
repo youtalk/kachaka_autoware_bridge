@@ -156,3 +156,119 @@ def rect_to_loop_params(
             f"lane_width={lane_width} + margin={margin}"
         )
     return LoopParams(center_x=center_x, center_y=center_y, radius=radius)
+
+
+MAP_PROJECTOR_INFO_YAML = "projector_type: Local\nvertical_datum: WGS84\n"
+
+_OSM_HEADER = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<osm version="0.6" generator="kachaka_autoware_maps">\n'
+)
+_OSM_FOOTER = "</osm>\n"
+
+
+def generate_circle_loop_osm(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    lane_width: float,
+    speed_limit: float,
+    num_segments: int,
+) -> str:
+    """Return a lanelet2 OSM document for one circular counter-clockwise loop.
+
+    The centerline is a circle of `radius` m about (center_x, center_y) in the
+    map frame (Local projector: node local_x/local_y are map-frame metres). The
+    circle is split into `num_segments` arcs; each arc is one lanelet whose left
+    bound is the inner circle (radius - lane_width/2) and right bound the outer
+    circle (radius + lane_width/2) — correct for counter-clockwise travel.
+    Consecutive arcs SHARE their cross-section node ids and the last arc reuses
+    arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
+
+    Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
+    radius would be non-positive), or if lane_width/speed_limit are non-positive.
+    """
+    if num_segments < 3:
+        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    if lane_width <= 0.0:
+        raise ValueError(f"lane_width must be > 0, got {lane_width}")
+    if speed_limit <= 0.0:
+        raise ValueError(f"speed_limit must be > 0, got {speed_limit}")
+    inner = radius - lane_width / 2.0
+    outer = radius + lane_width / 2.0
+    if inner <= 0.0:
+        raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
+
+    # Node ids: inner (left) 1..N at cross-sections 0..N-1; outer (right) N+1..2N.
+    left_ids: list[int] = []
+    right_ids: list[int] = []
+    node_xml: list[str] = []
+    for i in range(num_segments):
+        theta = 2.0 * math.pi * i / num_segments
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+        left_id = i + 1
+        right_id = num_segments + i + 1
+        left_ids.append(left_id)
+        right_ids.append(right_id)
+        for nid, rad in ((left_id, inner), (right_id, outer)):
+            x = center_x + rad * cos_t
+            y = center_y + rad * sin_t
+            node_xml.append(
+                f'  <node id="{nid}" lat="0.0" lon="0.0">'
+                f'<tag k="local_x" v="{x:.6f}"/>'
+                f'<tag k="local_y" v="{y:.6f}"/>'
+                f'<tag k="ele" v="0.0"/></node>'
+            )
+
+    way_xml: list[str] = []
+    relation_xml: list[str] = []
+    for i in range(num_segments):
+        j = (i + 1) % num_segments
+        left_way = 1001 + i
+        right_way = 2001 + i
+        lanelet = 3001 + i
+        way_xml.append(
+            f'  <way id="{left_way}"><nd ref="{left_ids[i]}"/><nd ref="{left_ids[j]}"/>'
+            f'<tag k="type" v="line_thin"/><tag k="subtype" v="solid"/></way>'
+        )
+        way_xml.append(
+            f'  <way id="{right_way}"><nd ref="{right_ids[i]}"/><nd ref="{right_ids[j]}"/>'
+            f'<tag k="type" v="line_thin"/><tag k="subtype" v="solid"/></way>'
+        )
+        relation_xml.append(
+            f'  <relation id="{lanelet}">\n'
+            f'    <member type="way" ref="{left_way}" role="left"/>\n'
+            f'    <member type="way" ref="{right_way}" role="right"/>\n'
+            f'    <tag k="type" v="lanelet"/>\n'
+            f'    <tag k="subtype" v="road"/>\n'
+            f'    <tag k="speed_limit" v="{speed_limit:g}"/>\n'
+            f'    <tag k="location" v="urban"/>\n'
+            f'    <tag k="one_way" v="yes"/>\n'
+            f"  </relation>"
+        )
+
+    return (
+        _OSM_HEADER
+        + "\n".join(node_xml)
+        + "\n"
+        + "\n".join(way_xml)
+        + "\n"
+        + "\n".join(relation_xml)
+        + "\n"
+        + _OSM_FOOTER
+    )
+
+
+def loop_params_yaml(
+    params: "LoopParams", lane_width: float, speed_limit: float, num_segments: int
+) -> str:
+    """Human/machine-readable sidecar describing the generated loop (consumed by
+    M4's full-lap route helper and useful for debugging)."""
+    return (
+        f"center_x: {params.center_x}\n"
+        f"center_y: {params.center_y}\n"
+        f"radius: {params.radius}\n"
+        f"lane_width: {lane_width}\n"
+        f"speed_limit: {speed_limit}\n"
+        f"num_segments: {num_segments}\n"
+    )

@@ -1,6 +1,9 @@
 # Copyright 2026 Yutaka Kondo
 # Licensed under the Apache License, Version 2.0 (the "License").
 
+import math
+import xml.etree.ElementTree as ET
+
 import pytest
 
 from kachaka_autoware_maps.loop_map_gen import (
@@ -116,3 +119,87 @@ def test_rect_too_small_raises() -> None:
             rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
             lane_width=0.6, margin=0.05, max_radius=0.9,
         )
+
+
+import xml.etree.ElementTree as ET  # noqa: E402
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    MAP_PROJECTOR_INFO_YAML,
+    generate_circle_loop_osm,
+    loop_params_yaml,
+)
+
+
+def _parse(osm: str) -> ET.Element:
+    return ET.fromstring(osm)
+
+
+def test_osm_is_valid_xml_with_osm_root() -> None:
+    root = _parse(generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=8))
+    assert root.tag == "osm"
+
+
+def test_counts_scale_with_segments() -> None:
+    root = _parse(generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=8))
+    # 2 nodes (inner+outer) per cross-section, 2 ways + 1 lanelet per arc.
+    assert len(root.findall("node")) == 16
+    assert len(root.findall("way")) == 16
+    assert len(root.findall("relation")) == 8
+
+
+def test_every_lanelet_is_one_way_road() -> None:
+    root = _parse(generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=6))
+    relations = root.findall("relation")
+    assert len(relations) == 6
+    for rel in relations:
+        tags = {t.get("k"): t.get("v") for t in rel.findall("tag")}
+        assert tags["type"] == "lanelet"
+        assert tags["subtype"] == "road"
+        assert tags["one_way"] == "yes"
+        # Each lanelet references exactly one left and one right way.
+        roles = sorted(m.get("role") for m in rel.findall("member"))
+        assert roles == ["left", "right"]
+
+
+def test_inner_and_outer_radii_match_lane_width() -> None:
+    cx, cy, r, w = 1.0, 2.0, 0.9, 0.6
+    root = _parse(generate_circle_loop_osm(cx, cy, r, w, 0.3, num_segments=4))
+    radii = set()
+    for node in root.findall("node"):
+        tags = {t.get("k"): float(t.get("v")) for t in node.findall("tag") if t.get("k") in ("local_x", "local_y")}
+        radii.add(round(math.hypot(tags["local_x"] - cx, tags["local_y"] - cy), 3))
+    assert radii == {round(r - w / 2, 3), round(r + w / 2, 3)}
+
+
+def test_loop_is_closed_last_arc_reuses_first_nodes() -> None:
+    # The last lanelet's bound ways must end on cross-section 0's node ids, so
+    # the routing graph forms a cycle. Collect each way's node refs and assert
+    # exactly one way starts where another ends, all the way around (every node
+    # id appears as a start exactly once and an end exactly once).
+    root = _parse(generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=5))
+    starts: list[str] = []
+    ends: list[str] = []
+    for way in root.findall("way"):
+        refs = [nd.get("ref") for nd in way.findall("nd")]
+        starts.append(refs[0])
+        ends.append(refs[-1])
+    assert sorted(starts) == sorted(ends)  # closed loop: no dangling endpoint
+
+
+def test_segment_count_floor_is_three() -> None:
+    with pytest.raises(ValueError):
+        generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=2)
+
+
+def test_radius_must_exceed_half_lane_width() -> None:
+    with pytest.raises(ValueError):
+        generate_circle_loop_osm(0.0, 0.0, 0.2, 0.6, 0.3, num_segments=8)
+
+
+def test_sidecars_have_expected_content() -> None:
+    assert "projector_type: Local" in MAP_PROJECTOR_INFO_YAML
+    assert "vertical_datum: WGS84" in MAP_PROJECTOR_INFO_YAML
+    yaml = loop_params_yaml(LoopParams(1.0, 2.0, 0.9), lane_width=0.6, speed_limit=0.3, num_segments=16)
+    assert "center_x: 1.0" in yaml
+    assert "radius: 0.9" in yaml
+    assert "num_segments: 16" in yaml
