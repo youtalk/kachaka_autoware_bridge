@@ -6,6 +6,12 @@
        description="Bring up control (simple_pure_pursuit) + the vehicle interface. Set false for localization-only (M1) bring-up."/>
   <arg name="vehicle_info_param_file"
        default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
+  <arg name="launch_planning" default="false"
+       description="Bring up the lanelet map + autoware_core_planning + INITIALIZED state. Requires map_path to contain a generated loop map."/>
+  <arg name="launch_api" default="false"
+       description="Bring up AD-API (default_adapi + rviz_adaptors) for routing."/>
+  <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
+       description="Directory with lanelet2_map.osm + map_projector_info.yaml (see kachaka_autoware_maps generate_loop_map)."/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
@@ -30,5 +36,24 @@
       <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
     </include>
     <include file="$(find-pkg-share kachaka_autoware_vehicle_interface)/launch/vehicle_interface.launch.xml"/>
+  </group>
+
+  <!-- Planning (M3): lanelet map + autoware_core_planning + INITIALIZED state.
+       planning.launch.xml / _planning_core.launch.xml are reused unchanged;
+       they read /map/vector_map + /localization/kinematic_state and publish
+       /planning/trajectory once a route is set. -->
+  <group if="$(var launch_planning)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/map.launch.xml">
+      <arg name="map_path" value="$(var map_path)"/>
+    </include>
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/planning.launch.xml">
+      <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+    </include>
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"/>
+  </group>
+
+  <!-- AD-API (M3/M4): routing + localization + interface adapters. -->
+  <group if="$(var launch_api)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/api.launch.xml"/>
   </group>
 </launch>
