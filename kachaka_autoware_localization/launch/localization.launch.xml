@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config_file"
+       default="$(find-pkg-share kachaka_autoware_localization)/config/localization.param.yaml"/>
+
+  <node pkg="kachaka_autoware_localization"
+        exec="kachaka_autoware_localization_node"
+        name="kachaka_autoware_localization"
+        output="screen">
+    <param from="$(var config_file)"/>
+  </node>
+</launch>

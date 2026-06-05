@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    map_frame: map
+    base_frame: base_link
+    odometry_topic: /kachaka/odometry/odometry
+    tf_timeout: 0.2
+    pose_covariance_xy: 0.01
+    pose_covariance_yaw: 0.01
+    twist_covariance_vx: 0.01
+    twist_covariance_wz: 0.01

@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="server_uri" default="192.168.1.101:26400"
+       description="Kachaka gRPC URI (DHCP; override per session)"/>
+
+  <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
+       robot_state_publisher, which provides base_footprint -> base_link). -->
+  <include file="$(find-pkg-share kachaka_grpc_ros2_bridge)/launch/grpc_ros2_bridge.launch.xml">
+    <arg name="server_uri" value="$(var server_uri)"/>
+    <arg name="namespace" value="kachaka"/>
+    <arg name="frame_prefix" value=""/>
+  </include>
+
+  <!-- Localization: republish Kachaka SLAM pose as /localization/kinematic_state.
+       No NDT / EKF / pointcloud map: Kachaka already publishes map -> odom. -->
+  <include file="$(find-pkg-share kachaka_autoware_localization)/launch/localization.launch.xml"/>
+</launch>
