@@ -48,6 +48,8 @@ def test_goal_uses_robot_angle_not_robot_radius() -> None:
 def test_invalid_radius_raises() -> None:
     with pytest.raises(ValueError):
         compute_lap_goal(0.0, 0.0, 0.0, 1.0, 0.0)
+    with pytest.raises(ValueError):
+        compute_lap_goal(0.0, 0.0, -1.0, 1.0, 0.0)
 
 
 def test_invalid_behind_angle_raises() -> None:

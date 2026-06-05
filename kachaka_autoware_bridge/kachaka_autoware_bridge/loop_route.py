@@ -25,7 +25,11 @@ class GoalPose:
 
 
 def _normalize_angle(a: float) -> float:
-    """Wrap an angle to (-pi, pi]."""
+    """Wrap an angle to [-pi, pi].
+
+    The exact boundary behaviour is float-dependent: atan2(sin(-pi), cos(-pi))
+    returns -pi because sin(-pi) is a small negative float rather than exact 0.
+    """
     return math.atan2(math.sin(a), math.cos(a))
 
 
@@ -48,6 +52,10 @@ def compute_lap_goal(
     (2*pi - behind_angle_rad) of the loop ~= one lap.
 
     Raises ValueError if radius <= 0 or behind_angle_rad is not in (0, 2*pi).
+
+    Note: if the robot is exactly at the loop centre, atan2(0, 0) = 0 is used
+    (treating the robot as due east of centre). Callers should not rely on this
+    degenerate case; it never occurs for a robot driving on the loop.
     """
     if radius <= 0.0:
         raise ValueError(f"radius must be > 0, got {radius}")
