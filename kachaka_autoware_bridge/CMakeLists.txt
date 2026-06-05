@@ -7,6 +7,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
+  scripts/perception_stub
   scripts/publish_canned_trajectory
   scripts/publish_initialization_state
   scripts/set_loop_route

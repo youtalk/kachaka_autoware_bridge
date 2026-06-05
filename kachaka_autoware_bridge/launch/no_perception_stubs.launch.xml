@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+  Stock (no-perception, no-EKF) planning input fillers.
+
+  The stock Kachaka path runs neither perception nor NDT/EKF localization, but
+  autoware_core planning hard-requires two input classes that nothing else
+  publishes, blocking /planning/trajectory:
+
+    1. /localization/acceleration (geometry_msgs/AccelWithCovarianceStamped) -
+       a localization output (design section 6.3) normally produced by the EKF.
+       Here autoware_twist2accel derives it from /localization/kinematic_state.
+    2. /perception/object_recognition/objects + /perception/obstacle_segmentation/
+       pointcloud - perception_stub publishes empty messages (design section 7).
+
+  Without these, behavior_velocity_planner / motion_velocity_planner log
+  "Waiting for acceleration data" / "Waiting for predicted objects" /
+  "Waiting for pointcloud" forever. Included from planning.launch.xml so the
+  stock planning stack is self-contained; re-point or drop these when real
+  localization/perception come online.
+-->
+<launch>
+  <node pkg="autoware_twist2accel" exec="autoware_twist2accel_node" name="twist2accel" output="both">
+    <param name="use_odom" value="true"/>
+    <param name="accel_lowpass_gain" value="0.9"/>
+    <remap from="input/odom" to="/localization/kinematic_state"/>
+    <remap from="output/accel" to="/localization/acceleration"/>
+  </node>
+
+  <node pkg="kachaka_autoware_bridge" exec="perception_stub" name="perception_stub" output="both"/>
+</launch>

@@ -17,6 +17,9 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>autoware_planning_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>autoware_perception_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>autoware_twist2accel</exec_depend>
 
   <exec_depend>kachaka_grpc_ros2_bridge</exec_depend>
   <exec_depend>kachaka_interfaces</exec_depend>
