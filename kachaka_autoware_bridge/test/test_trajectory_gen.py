@@ -52,6 +52,18 @@ def test_intermediate_velocity_is_constant_last_is_zero() -> None:
     assert points[-1].velocity_mps == pytest.approx(0.0)
 
 
+def test_non_integer_ratio_reaches_exact_length() -> None:
+    # length is not a multiple of spacing: grid points land at 0, 0.3, 0.6, 0.9,
+    # then an exact endpoint at length (1.0) is appended so the path reaches it
+    # instead of stopping short at 0.9.
+    points = generate_straight_trajectory(0.0, 0.0, 0.0, length=1.0, spacing=0.3, velocity_mps=0.2)
+    assert [p.x for p in points] == pytest.approx([0.0, 0.3, 0.6, 0.9, 1.0])
+    # The appended endpoint carries the terminal zero velocity; the point before
+    # it keeps the cruising velocity, and the final segment is intentionally < spacing.
+    assert points[-1].velocity_mps == pytest.approx(0.0)
+    assert points[-2].velocity_mps == pytest.approx(0.2)
+
+
 def test_nonpositive_spacing_raises() -> None:
     with pytest.raises(ValueError):
         generate_straight_trajectory(0.0, 0.0, 0.0, length=1.0, spacing=0.0, velocity_mps=0.2)
