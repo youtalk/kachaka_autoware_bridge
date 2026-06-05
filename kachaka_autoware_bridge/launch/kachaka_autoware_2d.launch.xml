@@ -12,6 +12,10 @@
        description="Bring up AD-API (default_adapi + rviz_adaptors) for routing."/>
   <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
        description="Directory with lanelet2_map.osm + map_projector_info.yaml (see kachaka_autoware_maps generate_loop_map)."/>
+  <arg name="launch_rviz" default="false"
+       description="Open RViz with the stock 2D driving config (Set Goal tool -> routing)."/>
+  <arg name="rviz_config" default="$(find-pkg-share kachaka_autoware_bridge)/rviz/kachaka_autoware_2d.rviz"
+       description="RViz config path."/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
@@ -57,5 +61,11 @@
        waiting on /map/vector_map + /localization/initialization_state. -->
   <group if="$(var launch_api)">
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/api.launch.xml"/>
+  </group>
+
+  <!-- RViz (M4): set a 2D Goal Pose to route over the loop; watch the route +
+       trajectory + robot pose. -->
+  <group if="$(var launch_rviz)">
+    <node pkg="rviz2" exec="rviz2" name="rviz2" args="-d $(var rviz_config)" output="screen"/>
   </group>
 </launch>
