@@ -121,8 +121,6 @@ def test_rect_too_small_raises() -> None:
         )
 
 
-import xml.etree.ElementTree as ET  # noqa: E402
-
 from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
     MAP_PROJECTOR_INFO_YAML,
     generate_circle_loop_osm,

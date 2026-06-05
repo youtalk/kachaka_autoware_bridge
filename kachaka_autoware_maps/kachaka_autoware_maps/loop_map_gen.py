@@ -224,9 +224,9 @@ def generate_circle_loop_osm(
     relation_xml: list[str] = []
     for i in range(num_segments):
         j = (i + 1) % num_segments
-        left_way = 1001 + i
-        right_way = 2001 + i
-        lanelet = 3001 + i
+        left_way = 2 * num_segments + i + 1
+        right_way = 3 * num_segments + i + 1
+        lanelet = 4 * num_segments + i + 1
         way_xml.append(
             f'  <way id="{left_way}"><nd ref="{left_ids[i]}"/><nd ref="{left_ids[j]}"/>'
             f'<tag k="type" v="line_thin"/><tag k="subtype" v="solid"/></way>'
