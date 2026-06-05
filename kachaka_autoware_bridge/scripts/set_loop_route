@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Set an AD-API route for a (near) full lap around the generated loop.
+
+Reads the loop centre/radius from loop_params.yaml (written by
+kachaka_autoware_maps generate_loop_map), waits for one
+/localization/kinematic_state to read the robot's current pose, computes a goal
+just behind the robot along the travel direction, clears any existing route, and
+calls /api/routing/set_route_points. The robot only drives after operation mode
+is switched to AUTONOMOUS (change_to_autonomous); this tool just sets the route.
+"""
+
+import math
+import sys
+from pathlib import Path
+
+import rclpy
+import yaml
+from autoware_adapi_v1_msgs.srv import ClearRoute, SetRoutePoints
+from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
+from rclpy.node import Node
+
+from kachaka_autoware_bridge.loop_route import compute_lap_goal
+from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
+
+DEFAULT_PARAMS = str(Path.home() / "maps" / "kachaka_loop" / "loop_params.yaml")
+DEFAULT_ODOM_TOPIC = "/localization/kinematic_state"
+DEFAULT_SET_SERVICE = "/api/routing/set_route_points"
+DEFAULT_CLEAR_SERVICE = "/api/routing/clear_route"
+DEFAULT_ODOM_TIMEOUT_SEC = 30.0
+DEFAULT_SERVICE_TIMEOUT_SEC = 10.0
+
+
+class SetLoopRouteNode(Node):
+    def __init__(self) -> None:
+        super().__init__("set_loop_route")
+        self.declare_parameter("loop_params_path", DEFAULT_PARAMS)
+        self.declare_parameter("odom_topic", DEFAULT_ODOM_TOPIC)
+        self.declare_parameter("behind_angle", math.pi / 8)
+        self.declare_parameter("clockwise", False)
+        self.declare_parameter("odom_timeout", DEFAULT_ODOM_TIMEOUT_SEC)
+
+        self.params_path = Path(str(self.get_parameter("loop_params_path").value)).expanduser()
+        self.odom_topic = str(self.get_parameter("odom_topic").value)
+        self.behind_angle = float(self.get_parameter("behind_angle").value)
+        self.clockwise = bool(self.get_parameter("clockwise").value)
+        self.odom_timeout_sec = float(self.get_parameter("odom_timeout").value)
+
+        loop = yaml.safe_load(self.params_path.read_text())
+        self.center_x = float(loop["center_x"])
+        self.center_y = float(loop["center_y"])
+        self.radius = float(loop["radius"])
+
+        self.latest_odom: Odometry | None = None
+        self.create_subscription(Odometry, self.odom_topic, self._on_odom, 1)
+        self.set_cli = self.create_client(SetRoutePoints, DEFAULT_SET_SERVICE)
+        self.clear_cli = self.create_client(ClearRoute, DEFAULT_CLEAR_SERVICE)
+
+    def _on_odom(self, msg: Odometry) -> None:
+        self.latest_odom = msg
+
+    def wait_for_odom(self) -> bool:
+        deadline = self.get_clock().now() + Duration(seconds=self.odom_timeout_sec)
+        while rclpy.ok() and self.latest_odom is None:
+            if self.get_clock().now() > deadline:
+                self.get_logger().error(
+                    f"No {self.odom_topic} within {self.odom_timeout_sec}s; is "
+                    "localization up and the robot off the dock?"
+                )
+                return False
+            rclpy.spin_once(self, timeout_sec=0.1)
+        return self.latest_odom is not None
+
+    def call(self) -> bool:
+        pose = self.latest_odom.pose.pose
+        goal = compute_lap_goal(
+            self.center_x, self.center_y, self.radius,
+            pose.position.x, pose.position.y,
+            behind_angle_rad=self.behind_angle, clockwise=self.clockwise,
+        )
+        # Clear any existing route first (best-effort).
+        if self.clear_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
+            fut = self.clear_cli.call_async(ClearRoute.Request())
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC)
+
+        if not self.set_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
+            self.get_logger().error(f"{DEFAULT_SET_SERVICE} unavailable; is AD-API up?")
+            return False
+
+        req = SetRoutePoints.Request()
+        req.header.frame_id = "map"
+        req.header.stamp = self.get_clock().now().to_msg()
+        req.option.allow_goal_modification = True
+        req.goal.position.x = goal.x
+        req.goal.position.y = goal.y
+        qz, qw = yaw_to_quaternion(goal.yaw)
+        req.goal.orientation.z = qz
+        req.goal.orientation.w = qw
+        fut = self.set_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, fut, timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC)
+        resp = fut.result()
+        if resp is None:
+            self.get_logger().error("set_route_points call timed out")
+            return False
+        if not resp.status.success:
+            self.get_logger().error(
+                f"set_route_points rejected: code={resp.status.code} {resp.status.message}"
+            )
+            return False
+        self.get_logger().info(
+            f"Route set: goal=({goal.x:.3f}, {goal.y:.3f}) yaw={goal.yaw:.3f}. "
+            "Call change_to_autonomous to drive."
+        )
+        return True
+
+
+def main() -> int:
+    rclpy.init()
+    node = SetLoopRouteNode()
+    try:
+        if not node.wait_for_odom():
+            return 1
+        return 0 if node.call() else 1
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        node.get_logger().error(f"set_loop_route: {exc}")
+        return 1
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
