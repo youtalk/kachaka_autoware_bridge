@@ -54,6 +54,17 @@
       <param from="$(var mission_planner_param_path)"/>
       <!-- kachaka_autoware: see fix 1 above. -->
       <param from="$(var vehicle_param_file)"/>
+      <!--
+        kachaka_autoware: the stock closed-loop is a thin (lane_width 0.6 m)
+        virtual ring on tight (~0.81 m radius) arcs. DefaultPlanner::is_goal_valid
+        rejects the goal with "Goal's footprint exceeds lane!" because the Kachaka
+        footprint (0.387 x 0.24 m) overhangs the narrow curved lane, so the route
+        comes back empty ("The planned route is empty."). The loop has no physical
+        lane walls and Kachaka keeps its own obstacle stop, so disable the goal
+        footprint-inside-lane check. Overrides check_footprint_inside_lanes:=true
+        from mission_planner.param.yaml.
+      -->
+      <param name="check_footprint_inside_lanes" value="false"/>
       <remap from="~/input/vector_map" to="$(var map_topic_name)"/>
       <remap from="~/input/odometry" to="/localization/kinematic_state"/>
       <remap from="~/input/operation_mode_state" to="/system/operation_mode/state"/>
@@ -73,6 +84,22 @@
         <param from="$(find-pkg-share autoware_core_planning)/config/nearest_search.param.yaml"/>
         <!-- kachaka_autoware: see fix 1 above. -->
         <param from="$(var vehicle_param_file)"/>
+        <!--
+          kachaka_autoware: path_generator defaults are road-scaled and break on
+          the tiny (~5.1 m circumference) closed loop. goal_connection
+          connection_section_length(7.5 m)/pre_goal_offset(1.0 m) and
+          path_length.forward(300 m)/backward(5 m) all exceed the loop, so the
+          goal-connection logic can't find a pre-goal inside the route -> "Failed
+          to connect path to goal" -> empty path -> no /planning/trajectory. When
+          s_goal <= connection_section_length it also degenerates to a straight
+          start->goal cut-across instead of following the arc. Scale them down so
+          the path follows the loop and connects to the goal over a short final
+          approach.
+        -->
+        <param name="path_length.forward" value="6.0"/>
+        <param name="path_length.backward" value="1.0"/>
+        <param name="goal_connection.connection_section_length" value="0.5"/>
+        <param name="goal_connection.pre_goal_offset" value="0.3"/>
         <remap from="~/input/route" to="/planning/route"/>
         <remap from="~/input/vector_map" to="$(var map_topic_name)"/>
         <remap from="~/input/odometry" to="/localization/kinematic_state"/>
