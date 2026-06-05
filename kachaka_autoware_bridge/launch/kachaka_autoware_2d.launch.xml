@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="server_uri" default="192.168.1.101:26400"
-       description="Kachaka gRPC URI (DHCP; override per session)"/>
+  <arg name="server_uri"
+       description="Kachaka gRPC endpoint as host:port (required, e.g. 192.0.2.10:26400)"/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
