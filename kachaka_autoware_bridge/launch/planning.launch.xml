@@ -15,4 +15,11 @@
   <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_planning_core.launch.xml">
     <arg name="vehicle_param_file" value="$(var vehicle_info_param_file)"/>
   </include>
+
+  <!--
+    Stock no-perception/no-EKF planning input fillers (acceleration via
+    twist2accel + empty perception stubs). autoware_core planning blocks on
+    these inputs otherwise, leaving /planning/trajectory empty.
+  -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/no_perception_stubs.launch.xml"/>
 </launch>

@@ -229,3 +229,81 @@ def test_occupancy_to_loop_osm_end_to_end() -> None:
     assert params.radius == pytest.approx(0.9)  # capped
     root = _parse(osm)
     assert len(root.findall("relation")) == 16
+
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    LOADED_TRAVEL_DIRECTION,
+    LoopFile,
+    parse_loop_params,
+)
+
+
+def test_loop_params_yaml_includes_travel_direction() -> None:
+    text = loop_params_yaml(
+        LoopParams(1.0, 2.0, 0.9), lane_width=0.6, speed_limit=0.3, num_segments=16
+    )
+    assert "travel_direction: counterclockwise" in text
+
+
+def test_loop_params_round_trip() -> None:
+    text = loop_params_yaml(
+        LoopParams(1.5, -0.5, 0.81), lane_width=0.6, speed_limit=0.3, num_segments=12
+    )
+    assert parse_loop_params(text) == LoopFile(
+        1.5, -0.5, 0.81, 0.6, 0.3, 12, LOADED_TRAVEL_DIRECTION
+    )
+
+
+def test_parse_loop_params_defaults_direction_for_old_files() -> None:
+    text = (
+        "center_x: 0.0\ncenter_y: 0.0\nradius: 0.9\n"
+        "lane_width: 0.6\nspeed_limit: 0.3\nnum_segments: 16\n"
+    )
+    assert parse_loop_params(text).travel_direction == LOADED_TRAVEL_DIRECTION
+
+
+def test_loaded_loop_is_a_routable_cycle() -> None:
+    """The generated loop loads as a single routable one-way cycle.
+
+    This asserts CONNECTIVITY (the real invariant the generator must hold), not a
+    direction: lanelet2's winding normalisation is not load-invariant (a raw load
+    winds this clockwise, Autoware's loader counter-clockwise), so set_loop_route
+    reads the actual direction from the live /map/vector_map. Skipped where the
+    lanelet2 python bindings are not installed.
+    """
+    import os
+    import tempfile
+
+    pytest.importorskip("lanelet2")
+    from lanelet2 import io, projection, routing, traffic_rules
+
+    osm = generate_circle_loop_osm(0.98, 0.13, 0.81, 0.6, 0.3, 16)
+    handle = tempfile.NamedTemporaryFile("w", suffix=".osm", delete=False)
+    handle.write(osm)
+    handle.close()
+    try:
+        m = io.load(handle.name, projection.UtmProjector(io.Origin(0.0, 0.0)))
+    finally:
+        os.unlink(handle.name)
+    for p in m.pointLayer:
+        a = p.attributes
+        if "local_x" in a:
+            p.x = float(a["local_x"])
+            p.y = float(a["local_y"])
+    rules = traffic_rules.create(
+        traffic_rules.Locations.Germany, traffic_rules.Participants.Vehicle
+    )
+    graph = routing.RoutingGraph(m, rules)
+    lanelets = sorted(m.laneletLayer, key=lambda L: L.id)
+    assert len(lanelets) == 16
+    # Every lanelet has exactly one successor, and following the chain forms one
+    # cycle visiting all 16 lanelets exactly once.
+    for ll in lanelets:
+        assert len(graph.following(ll)) == 1
+    visited = []
+    cur = lanelets[0]
+    for _ in range(16):
+        visited.append(cur.id)
+        cur = graph.following(cur)[0]
+    assert cur.id == lanelets[0].id  # closed the cycle
+    assert sorted(visited) == [ll.id for ll in lanelets]  # all, once each

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Publish empty perception messages for the stock (no-perception) planning path.
+
+The stock Kachaka path runs no perception, but autoware_core planning still hard
+-requires perception inputs to exist before it produces a trajectory:
+
+  - behavior_velocity_planner / motion_velocity_planner block on
+    /perception/object_recognition/objects (autoware_perception_msgs/PredictedObjects)
+  - motion_velocity_planner blocks on
+    /perception/obstacle_segmentation/pointcloud (sensor_msgs/PointCloud2)
+
+Without these, motion_velocity_planner logs "Waiting for predicted objects" /
+"Waiting for pointcloud" forever and /planning/trajectory stays empty. The
+integration design (section 7) calls for exactly this helper node. Publishing
+empty messages keeps the trajectory chain connected without changing behavior:
+no objects -> no collision/stop, empty cloud -> no obstacle stop.
+
+Topics/frames are parameters so they can be re-pointed at real perception later.
+"""
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+
+from autoware_perception_msgs.msg import PredictedObjects
+from sensor_msgs.msg import PointCloud2
+
+
+class PerceptionStub(Node):
+    def __init__(self) -> None:
+        super().__init__("perception_stub")
+        self.declare_parameter("objects_topic", "/perception/object_recognition/objects")
+        self.declare_parameter("pointcloud_topic", "/perception/obstacle_segmentation/pointcloud")
+        self.declare_parameter("objects_frame", "map")
+        self.declare_parameter("pointcloud_frame", "base_link")
+        self.declare_parameter("rate_hz", 10.0)
+
+        objects_topic = str(self.get_parameter("objects_topic").value)
+        pointcloud_topic = str(self.get_parameter("pointcloud_topic").value)
+        self.objects_frame = str(self.get_parameter("objects_frame").value)
+        self.pointcloud_frame = str(self.get_parameter("pointcloud_frame").value)
+        rate_hz = max(float(self.get_parameter("rate_hz").value), 0.1)
+
+        # Sensor-style QoS: best effort, volatile, depth 1 (matches what the
+        # planners' perception subscriptions expect).
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.objects_pub = self.create_publisher(PredictedObjects, objects_topic, sensor_qos)
+        self.pointcloud_pub = self.create_publisher(PointCloud2, pointcloud_topic, sensor_qos)
+        self.create_timer(1.0 / rate_hz, self._publish)
+        self.get_logger().info(
+            f"perception_stub: empty {objects_topic} ({self.objects_frame}) + "
+            f"{pointcloud_topic} ({self.pointcloud_frame}) at {rate_hz:.0f} Hz"
+        )
+
+    def _publish(self) -> None:
+        now = self.get_clock().now().to_msg()
+
+        objects = PredictedObjects()
+        objects.header.stamp = now
+        objects.header.frame_id = self.objects_frame
+        self.objects_pub.publish(objects)
+
+        cloud = PointCloud2()
+        cloud.header.stamp = now
+        cloud.header.frame_id = self.pointcloud_frame
+        # Empty cloud: zero points, but a valid (consistent) layout.
+        cloud.height = 1
+        cloud.width = 0
+        cloud.is_bigendian = False
+        cloud.point_step = 0
+        cloud.row_step = 0
+        cloud.is_dense = True
+        self.pointcloud_pub.publish(cloud)
+
+
+def main() -> None:
+    rclpy.init()
+    node = PerceptionStub()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -15,6 +15,19 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import yaml
+
+# Fallback travel direction recorded in loop_params.yaml. The AUTHORITATIVE
+# direction is read at runtime from the live /map/vector_map by set_loop_route,
+# because lanelet2's winding normalisation is NOT load-invariant: a raw
+# lanelet2.io.load (degenerate-then-patched coords) winds this OSM CLOCKWISE, but
+# Autoware's map loader (LocalProjector, real coords present at parse) winds the
+# very same OSM COUNTER-CLOCKWISE. route_handler uses Autoware's loader, so this
+# fallback matches it. If a consumer faces the wrong way, route_handler's 90-deg
+# start-yaw gate rejects the start lanelet ("Failed to find a proper route!").
+# Treat this only as a hint for when the live map cannot be read.
+LOADED_TRAVEL_DIRECTION = "counterclockwise"
+
 
 @dataclass(frozen=True)
 class FreeRectangle:
@@ -266,11 +279,32 @@ def generate_circle_loop_osm(
     )
 
 
+@dataclass(frozen=True)
+class LoopFile:
+    """Full contents of loop_params.yaml (centre/radius + sizing + direction)."""
+
+    center_x: float
+    center_y: float
+    radius: float
+    lane_width: float
+    speed_limit: float
+    num_segments: int
+    travel_direction: str
+
+
 def loop_params_yaml(
-    params: "LoopParams", lane_width: float, speed_limit: float, num_segments: int
+    params: "LoopParams",
+    lane_width: float,
+    speed_limit: float,
+    num_segments: int,
+    travel_direction: str = LOADED_TRAVEL_DIRECTION,
 ) -> str:
     """Human/machine-readable sidecar describing the generated loop (consumed by
-    M4's full-lap route helper and useful for debugging)."""
+    M4's full-lap route helper and useful for debugging).
+
+    ``travel_direction`` records how the loop is traversed once loaded (default
+    LOADED_TRAVEL_DIRECTION); set_loop_route reads it to align the robot and goal.
+    """
     return (
         f"center_x: {params.center_x}\n"
         f"center_y: {params.center_y}\n"
@@ -278,6 +312,27 @@ def loop_params_yaml(
         f"lane_width: {lane_width}\n"
         f"speed_limit: {speed_limit}\n"
         f"num_segments: {num_segments}\n"
+        f"travel_direction: {travel_direction}\n"
+    )
+
+
+def parse_loop_params(text: str) -> "LoopFile":
+    """Parse loop_params.yaml text into a LoopFile (inverse of loop_params_yaml).
+
+    Shared loader so every consumer reads the same schema and it can't drift. A
+    file written before travel_direction existed defaults to
+    LOADED_TRAVEL_DIRECTION. Raises KeyError on a missing required field and
+    ValueError on a non-numeric value.
+    """
+    data = yaml.safe_load(text) or {}
+    return LoopFile(
+        center_x=float(data["center_x"]),
+        center_y=float(data["center_y"]),
+        radius=float(data["radius"]),
+        lane_width=float(data["lane_width"]),
+        speed_limit=float(data["speed_limit"]),
+        num_segments=int(data["num_segments"]),
+        travel_direction=str(data.get("travel_direction", LOADED_TRAVEL_DIRECTION)),
     )
 
 
