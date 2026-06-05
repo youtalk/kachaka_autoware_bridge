@@ -36,8 +36,8 @@ cannot meaningfully navigate with it. Replace with a SLAM-built map
 (sections 1–4 below) before driving.
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/ros/jazzy/install/setup.bash
+source /opt/ros/jazzy/setup.zsh
+source ~/ros/jazzy/install/setup.zsh
 ros2 launch kachaka_autoware_maps snapshot.launch.xml \
   sensor_hostname:=os-122609004411.local \
   output_dir:=$HOME/maps/kachaka_pipeline_test

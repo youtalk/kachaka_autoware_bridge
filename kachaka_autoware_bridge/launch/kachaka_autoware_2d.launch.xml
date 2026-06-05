@@ -52,7 +52,9 @@
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"/>
   </group>
 
-  <!-- AD-API (M3/M4): routing + localization + interface adapters. -->
+  <!-- AD-API (M3/M4): routing + localization + interface adapters.
+       NOTE: requires launch_planning:=true too — adapi stalls silently
+       waiting on /map/vector_map + /localization/initialization_state. -->
   <group if="$(var launch_api)">
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/api.launch.xml"/>
   </group>
