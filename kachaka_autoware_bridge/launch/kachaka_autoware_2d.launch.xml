@@ -2,6 +2,10 @@
 <launch>
   <arg name="server_uri"
        description="Kachaka gRPC endpoint as host:port (required, e.g. 192.0.2.10:26400)"/>
+  <arg name="launch_control" default="true"
+       description="Bring up control (simple_pure_pursuit) + the vehicle interface. Set false for localization-only (M1) bring-up."/>
+  <arg name="vehicle_info_param_file"
+       default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
@@ -14,4 +18,17 @@
   <!-- Localization: republish Kachaka SLAM pose as /localization/kinematic_state.
        No NDT / EKF / pointcloud map: Kachaka already publishes map -> odom. -->
   <include file="$(find-pkg-share kachaka_autoware_localization)/launch/localization.launch.xml"/>
+
+  <!-- Control + Vehicle Interface (M2). simple_pure_pursuit consumes
+       /localization/kinematic_state + /planning/trajectory and publishes
+       /control/command/control_cmd; the vehicle interface converts it to a Twist
+       on /kachaka/manual_control/cmd_vel ONLY while operation mode is AUTONOMOUS.
+       No trajectory publisher is started here: bring-up stays still until a
+       trajectory exists (M3 planner, or canned_trajectory.launch.xml for M2). -->
+  <group if="$(var launch_control)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/control.launch.xml">
+      <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+    </include>
+    <include file="$(find-pkg-share kachaka_autoware_vehicle_interface)/launch/vehicle_interface.launch.xml"/>
+  </group>
 </launch>
