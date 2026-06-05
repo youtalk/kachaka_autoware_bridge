@@ -103,3 +103,56 @@ def largest_free_rectangle(
     if best is None:
         raise ValueError("occupancy grid has no free cell")
     return best
+
+
+@dataclass(frozen=True)
+class LoopParams:
+    """Circular loop centre (map frame, metres) and centerline radius (m)."""
+
+    center_x: float
+    center_y: float
+    radius: float
+
+
+def rect_to_loop_params(
+    rect: FreeRectangle,
+    resolution: float,
+    origin_x: float,
+    origin_y: float,
+    lane_width: float,
+    margin: float,
+    max_radius: float,
+) -> LoopParams:
+    """Map a free-cell rectangle to a circular-loop centre + radius (map frame).
+
+    Cell-corner (row, col) maps to map-frame metres as
+        x = origin_x + col * resolution,  y = origin_y + row * resolution
+    where (origin_x, origin_y) is the grid's info.origin.position; this assumes
+    zero grid rotation (true for Kachaka's axis-aligned map). The loop centre is
+    the rectangle centre. The centerline radius is the largest circle that fits
+    inside the rectangle while leaving half the lane plus `margin` of clearance:
+        usable = min(width_m, height_m) / 2 - lane_width / 2 - margin
+        radius = min(usable, max_radius)
+    Raises ValueError on non-positive resolution/lane_width or a rectangle too
+    small to fit a positive radius.
+    """
+    if resolution <= 0.0:
+        raise ValueError(f"resolution must be > 0, got {resolution}")
+    if lane_width <= 0.0:
+        raise ValueError(f"lane_width must be > 0, got {lane_width}")
+
+    center_col = rect.col0 + rect.cols / 2.0
+    center_row = rect.row0 + rect.rows / 2.0
+    center_x = origin_x + center_col * resolution
+    center_y = origin_y + center_row * resolution
+
+    width_m = rect.cols * resolution
+    height_m = rect.rows * resolution
+    usable = min(width_m, height_m) / 2.0 - lane_width / 2.0 - margin
+    radius = min(usable, max_radius)
+    if radius <= 0.0:
+        raise ValueError(
+            f"free rectangle {width_m:.2f}x{height_m:.2f} m is too small for "
+            f"lane_width={lane_width} + margin={margin}"
+        )
+    return LoopParams(center_x=center_x, center_y=center_y, radius=radius)

@@ -58,3 +58,61 @@ def test_bad_dimensions_raise() -> None:
 def test_no_free_cell_raises() -> None:
     with pytest.raises(ValueError):
         largest_free_rectangle([100, 100, 100, 100], width=2, height=2)
+
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    LoopParams,
+    rect_to_loop_params,
+)
+
+
+def test_rect_center_maps_to_map_frame() -> None:
+    # 20x20-cell free rect at the grid origin, 0.05 m cells. The rectangle spans
+    # map corners (0,0)..(1,1) m, so its centre is (0.5, 0.5) m plus the grid
+    # origin offset.
+    rect = FreeRectangle(row0=0, col0=0, row1=19, col1=19)
+    params = rect_to_loop_params(
+        rect, resolution=0.05, origin_x=-2.0, origin_y=-3.0,
+        lane_width=0.6, margin=0.05, max_radius=0.9,
+    )
+    assert params.center_x == pytest.approx(-2.0 + 0.5)
+    assert params.center_y == pytest.approx(-3.0 + 0.5)
+
+
+def test_radius_fits_inside_small_rect() -> None:
+    # 1.0 m x 1.0 m free area: usable = 0.5 - 0.3 - 0.05 = 0.15 m < cap.
+    rect = FreeRectangle(row0=0, col0=0, row1=19, col1=19)
+    params = rect_to_loop_params(
+        rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        lane_width=0.6, margin=0.05, max_radius=0.9,
+    )
+    assert params.radius == pytest.approx(0.15)
+
+
+def test_radius_capped_in_large_rect() -> None:
+    # 3.0 m x 3.0 m free area: usable = 1.5 - 0.3 - 0.05 = 1.15 m, capped to 0.9.
+    rect = FreeRectangle(row0=0, col0=0, row1=59, col1=59)
+    params = rect_to_loop_params(
+        rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        lane_width=0.6, margin=0.05, max_radius=0.9,
+    )
+    assert params.radius == pytest.approx(0.9)
+
+
+def test_radius_uses_shorter_side() -> None:
+    # Wide-but-short rect: 3.0 m wide x 1.0 m tall -> shorter side (1.0) governs.
+    rect = FreeRectangle(row0=0, col0=0, row1=19, col1=59)
+    params = rect_to_loop_params(
+        rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        lane_width=0.6, margin=0.05, max_radius=0.9,
+    )
+    assert params.radius == pytest.approx(0.15)
+
+
+def test_rect_too_small_raises() -> None:
+    rect = FreeRectangle(row0=0, col0=0, row1=5, col1=5)  # 0.3 m x 0.3 m
+    with pytest.raises(ValueError):
+        rect_to_loop_params(
+            rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+            lane_width=0.6, margin=0.05, max_radius=0.9,
+        )
