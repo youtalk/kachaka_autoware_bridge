@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    Generate a circular loop lanelet2 map from /kachaka/mapping/map. Run with
+    the Kachaka bridge up and the robot OFF the dock. One-shot: exits after
+    writing the map directory. Defaults are tuned on the robot (see README).
+  -->
+  <arg name="output_dir" default="$(env HOME)/maps/kachaka_loop"/>
+  <arg name="lane_width" default="0.6"/>
+  <arg name="margin" default="0.05"/>
+  <arg name="max_radius" default="0.9"/>
+  <arg name="speed_limit" default="0.3"/>
+  <arg name="num_segments" default="16"/>
+
+  <node pkg="kachaka_autoware_maps" exec="generate_loop_map"
+        name="generate_loop_map" output="screen">
+    <param name="output_dir" value="$(var output_dir)"/>
+    <param name="lane_width" value="$(var lane_width)"/>
+    <param name="margin" value="$(var margin)"/>
+    <param name="max_radius" value="$(var max_radius)"/>
+    <param name="speed_limit" value="$(var speed_limit)"/>
+    <param name="num_segments" value="$(var num_segments)"/>
+  </node>
+</launch>
