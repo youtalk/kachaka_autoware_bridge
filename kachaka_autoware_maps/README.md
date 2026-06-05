@@ -116,7 +116,10 @@ Writes `lanelet2_map.osm`, `map_projector_info.yaml`, and `loop_params.yaml`
 (centre/radius for downstream tools). Tunable parameters: `lane_width` (0.6 m),
 `max_radius` (0.9 m cap), `margin` (0.05 m), `num_segments` (16), `speed_limit`
 (0.3 m/s). The projector is `Local`, so lanelet `local_x`/`local_y` are
-map-frame metres aligned with Kachaka's map origin.
+map-frame metres aligned with Kachaka's map origin. Loop smoothness is
+controlled by `num_segments` (more segments = smoother circle), **not** by the
+map loader's centerline resolution — increase `num_segments` if pure-pursuit
+chatters on the arcs.
 
 Then bring up planning against it:
 

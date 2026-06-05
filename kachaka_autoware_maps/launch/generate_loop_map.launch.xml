@@ -11,6 +11,10 @@
   <arg name="max_radius" default="0.9"/>
   <arg name="speed_limit" default="0.3"/>
   <arg name="num_segments" default="16"/>
+  <arg name="input_topic" default="/kachaka/mapping/map"/>
+  <arg name="occupied_threshold" default="50"/>
+  <arg name="treat_unknown_as_occupied" default="true"/>
+  <arg name="map_timeout" default="30.0"/>
 
   <node pkg="kachaka_autoware_maps" exec="generate_loop_map"
         name="generate_loop_map" output="screen">
@@ -20,5 +24,9 @@
     <param name="max_radius" value="$(var max_radius)"/>
     <param name="speed_limit" value="$(var speed_limit)"/>
     <param name="num_segments" value="$(var num_segments)"/>
+    <param name="input_topic" value="$(var input_topic)"/>
+    <param name="occupied_threshold" value="$(var occupied_threshold)"/>
+    <param name="treat_unknown_as_occupied" value="$(var treat_unknown_as_occupied)"/>
+    <param name="map_timeout" value="$(var map_timeout)"/>
   </node>
 </launch>
