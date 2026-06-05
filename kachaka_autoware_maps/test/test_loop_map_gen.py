@@ -203,3 +203,23 @@ def test_sidecars_have_expected_content() -> None:
     assert "center_x: 1.0" in yaml
     assert "radius: 0.9" in yaml
     assert "num_segments: 16" in yaml
+
+
+from kachaka_autoware_maps.loop_map_gen import occupancy_to_loop_osm  # noqa: E402
+
+
+def test_occupancy_to_loop_osm_end_to_end() -> None:
+    # 80x80 free cells at 0.05 m = 4 m x 4 m free area centred via origin.
+    data = [0] * (80 * 80)
+    osm, params = occupancy_to_loop_osm(
+        data, width=80, height=80, resolution=0.05,
+        origin_x=-2.0, origin_y=-2.0,
+        lane_width=0.6, margin=0.05, max_radius=0.9,
+        speed_limit=0.3, num_segments=16,
+    )
+    # Free area centre is (0, 0) in the map frame (origin -2 + 2 m).
+    assert params.center_x == pytest.approx(0.0)
+    assert params.center_y == pytest.approx(0.0)
+    assert params.radius == pytest.approx(0.9)  # capped
+    root = _parse(osm)
+    assert len(root.findall("relation")) == 16

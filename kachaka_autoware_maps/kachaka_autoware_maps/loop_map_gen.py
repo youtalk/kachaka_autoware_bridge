@@ -272,3 +272,33 @@ def loop_params_yaml(
         f"speed_limit: {speed_limit}\n"
         f"num_segments: {num_segments}\n"
     )
+
+
+def occupancy_to_loop_osm(
+    data: list[int],
+    width: int,
+    height: int,
+    resolution: float,
+    origin_x: float,
+    origin_y: float,
+    *,
+    lane_width: float,
+    margin: float,
+    max_radius: float,
+    speed_limit: float,
+    num_segments: int,
+    occupied_threshold: int = 50,
+    treat_unknown_as_occupied: bool = True,
+) -> "tuple[str, LoopParams]":
+    """Find the largest free rectangle, fit a loop, and return (osm, params)."""
+    rect = largest_free_rectangle(
+        data, width, height, occupied_threshold, treat_unknown_as_occupied
+    )
+    params = rect_to_loop_params(
+        rect, resolution, origin_x, origin_y, lane_width, margin, max_radius
+    )
+    osm = generate_circle_loop_osm(
+        params.center_x, params.center_y, params.radius,
+        lane_width, speed_limit, num_segments,
+    )
+    return osm, params
