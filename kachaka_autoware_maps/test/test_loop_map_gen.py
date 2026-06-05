@@ -203,6 +203,14 @@ def test_sidecars_have_expected_content() -> None:
     assert "num_segments: 16" in yaml
 
 
+def test_speed_limit_tag_is_kmh_from_mps() -> None:
+    root = _parse(generate_circle_loop_osm(0.0, 0.0, 0.9, 0.6, 0.3, num_segments=4))
+    rel = root.findall("relation")[0]
+    tags = {t.get("k"): t.get("v") for t in rel.findall("tag")}
+    # 0.3 m/s -> 1.08 km/h (lanelet2 speed_limit is km/h)
+    assert float(tags["speed_limit"]) == pytest.approx(0.3 * 3.6)
+
+
 from kachaka_autoware_maps.loop_map_gen import occupancy_to_loop_osm  # noqa: E402
 
 

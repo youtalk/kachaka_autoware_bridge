@@ -185,6 +185,10 @@ def generate_circle_loop_osm(
     Consecutive arcs SHARE their cross-section node ids and the last arc reuses
     arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
 
+    `speed_limit` is in **m/s** (the generator's natural input unit). It is
+    converted to **km/h** before being written to the OSM ``speed_limit`` tag,
+    per the lanelet2 / Autoware convention (Autoware sample maps use km/h).
+
     Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
     radius would be non-positive), or if lane_width/speed_limit are non-positive.
     """
@@ -198,6 +202,9 @@ def generate_circle_loop_osm(
     outer = radius + lane_width / 2.0
     if inner <= 0.0:
         raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
+
+    # lanelet2 speed_limit tag is in km/h; convert from the m/s input.
+    speed_limit_kmh = speed_limit * 3.6
 
     # Node ids: inner (left) 1..N at cross-sections 0..N-1; outer (right) N+1..2N.
     left_ids: list[int] = []
@@ -241,7 +248,7 @@ def generate_circle_loop_osm(
             f'    <member type="way" ref="{right_way}" role="right"/>\n'
             f'    <tag k="type" v="lanelet"/>\n'
             f'    <tag k="subtype" v="road"/>\n'
-            f'    <tag k="speed_limit" v="{speed_limit:g}"/>\n'
+            f'    <tag k="speed_limit" v="{speed_limit_kmh:g}"/>\n'
             f'    <tag k="location" v="urban"/>\n'
             f'    <tag k="one_way" v="yes"/>\n'
             f"  </relation>"
