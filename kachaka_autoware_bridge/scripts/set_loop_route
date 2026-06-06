@@ -28,50 +28,31 @@ robot only drives the lap once operation mode is AUTONOMOUS (change_to_autonomou
 """
 
 import math
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import rclpy
 from autoware_adapi_v1_msgs.srv import ClearRoute, SetRoutePoints
-from autoware_map_msgs.msg import LaneletMapBin
-from kachaka_interfaces.action import ExecKachakaCommand
-from kachaka_interfaces.msg import KachakaCommand
 from nav_msgs.msg import Odometry
-from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
-from std_srvs.srv import SetBool
 
-from kachaka_autoware_bridge.loop_route import (
-    compute_lap_goal,
-    nearest_ring_pose,
-    travel_direction_from_tangent,
-)
+from kachaka_autoware_bridge.loop_route import compute_lap_goal
+from kachaka_autoware_bridge.ring_driver import RingDriver
 from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
 from kachaka_autoware_maps.loop_map_gen import parse_loop_params
 
 DEFAULT_PARAMS = str(Path.home() / "maps" / "kachaka_loop" / "loop_params.yaml")
 DEFAULT_ODOM_TOPIC = "/localization/kinematic_state"
-DEFAULT_MAP_TOPIC = "/map/vector_map"
 DEFAULT_SET_SERVICE = "/api/routing/set_route_points"
 DEFAULT_CLEAR_SERVICE = "/api/routing/clear_route"
-DEFAULT_COMMAND_ACTION = "/kachaka/kachaka_command/execute"
-DEFAULT_MANUAL_CONTROL_SERVICE = "/kachaka/manual_control/set_enabled"
 DEFAULT_ODOM_TIMEOUT_SEC = 30.0
 DEFAULT_SERVICE_TIMEOUT_SEC = 10.0
 DEFAULT_POSITION_TIMEOUT_SEC = 120.0
-ALIGN_TOLERANCE_RAD = math.radians(60.0)  # route_handler gate is 90 deg; keep margin
 
 
 def _yaw_from_quaternion(q) -> float:
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-
-
-def _angle_diff(a: float, b: float) -> float:
-    return abs(math.atan2(math.sin(a - b), math.cos(a - b)))
 
 
 class SetLoopRouteNode(Node):
@@ -95,25 +76,14 @@ class SetLoopRouteNode(Node):
         if self.behind_angle <= 0.0:
             self.behind_angle = 2.0 * math.pi / max(self.loop.num_segments, 3)
 
-        latched = QoSProfile(
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
-            history=QoSHistoryPolicy.KEEP_LAST, depth=1,
-        )
         self.latest_odom: Odometry | None = None
-        self.latest_map: LaneletMapBin | None = None
         self.create_subscription(Odometry, self.odom_topic, self._on_odom, 1)
-        self.create_subscription(LaneletMapBin, DEFAULT_MAP_TOPIC, self._on_map, latched)
         self.set_cli = self.create_client(SetRoutePoints, DEFAULT_SET_SERVICE)
         self.clear_cli = self.create_client(ClearRoute, DEFAULT_CLEAR_SERVICE)
-        self.manual_cli = self.create_client(SetBool, DEFAULT_MANUAL_CONTROL_SERVICE)
-        self.move_client = ActionClient(self, ExecKachakaCommand, DEFAULT_COMMAND_ACTION)
+        self.ring = RingDriver(self, self.loop, self.position_timeout_sec)
 
     def _on_odom(self, msg: Odometry) -> None:
         self.latest_odom = msg
-
-    def _on_map(self, msg: LaneletMapBin) -> None:
-        self.latest_map = msg
 
     def _wait(self, attr: str, label: str, timeout_sec: float) -> bool:
         deadline = self.get_clock().now() + Duration(seconds=timeout_sec)
@@ -140,124 +110,15 @@ class SetLoopRouteNode(Node):
         for _ in range(10):
             rclpy.spin_once(self, timeout_sec=0.1)
 
-    def _resolve_travel_direction(self, rx: float, ry: float) -> str:
-        """Read the loop's travel direction from the live /map/vector_map.
-
-        Falls back to loop_params.travel_direction if the map or lanelet2 python
-        is unavailable, or the robot's ring point lies in no lanelet.
-        """
-        fallback = self.loop.travel_direction
-        if not self._wait("latest_map", DEFAULT_MAP_TOPIC, 5.0):
-            self.get_logger().warning(
-                f"no {DEFAULT_MAP_TOPIC}; using loop_params direction '{fallback}'"
-            )
-            return fallback
-        try:
-            from lanelet2 import core, geometry, io
-        except ImportError:
-            self.get_logger().warning(f"lanelet2 python missing; using '{fallback}'")
-            return fallback
-        tmp = None
-        try:
-            with tempfile.NamedTemporaryFile("wb", suffix=".bin", delete=False) as handle:
-                handle.write(bytes(self.latest_map.data))
-                tmp = handle.name
-            lmap = io.load(tmp, io.Origin(0.0, 0.0))
-            theta = math.atan2(ry - self.loop.center_y, rx - self.loop.center_x)
-            ring = core.BasicPoint2d(
-                self.loop.center_x + self.loop.radius * math.cos(theta),
-                self.loop.center_y + self.loop.radius * math.sin(theta),
-            )
-            here = [ll for ll in lmap.laneletLayer if geometry.inside(ll, ring)]
-            if not here:
-                self.get_logger().warning(f"ring point in no lanelet; using '{fallback}'")
-                return fallback
-            c = here[0].centerline
-            tangent = math.atan2(c[-1].y - c[0].y, c[-1].x - c[0].x)
-            direction = travel_direction_from_tangent(theta, tangent)
-            self.get_logger().info(
-                f"live map travel direction = {direction} (lanelet {here[0].id})"
-            )
-            return direction
-        except Exception as exc:  # noqa: BLE001 - any failure -> fall back to hint
-            self.get_logger().warning(f"could not read live map direction ({exc}); using '{fallback}'")
-            return fallback
-        finally:
-            if tmp is not None and os.path.exists(tmp):
-                os.unlink(tmp)
-
-    def _set_manual_control(self, enabled: bool) -> None:
-        """Best-effort toggle of Kachaka manual_control; logs and continues."""
-        if not self.manual_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
-            self.get_logger().warning(
-                f"{DEFAULT_MANUAL_CONTROL_SERVICE} unavailable; leaving manual_control as-is"
-            )
-            return
-        fut = self.manual_cli.call_async(SetBool.Request(data=enabled))
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC)
-        resp = fut.result()
-        if resp is None or not resp.success:
-            self.get_logger().warning(f"manual_control set_enabled({enabled}) did not confirm")
-
-    def _drive_to_pose(self, x: float, y: float, yaw: float) -> bool:
-        """Drive the robot to (x, y, yaw) via Kachaka MOVE_TO_POSE; blocks to done."""
-        if not self.move_client.wait_for_server(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
-            self.get_logger().error(f"{DEFAULT_COMMAND_ACTION} unavailable; is the bridge up?")
-            return False
-        goal = ExecKachakaCommand.Goal()
-        goal.kachaka_command.command_type = KachakaCommand.MOVE_TO_POSE_COMMAND
-        goal.kachaka_command.move_to_pose_command_x = x
-        goal.kachaka_command.move_to_pose_command_y = y
-        goal.kachaka_command.move_to_pose_command_yaw = yaw
-        self.get_logger().info(f"Driving onto loop: target=({x:.3f}, {y:.3f}, yaw={yaw:.3f})")
-        send_fut = self.move_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, send_fut, timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC)
-        handle = send_fut.result()
-        if handle is None or not handle.accepted:
-            self.get_logger().error("MOVE_TO_POSE goal was rejected")
-            return False
-        result_fut = handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_fut, timeout_sec=self.position_timeout_sec)
-        wrapped = result_fut.result()
-        if wrapped is None:
-            self.get_logger().error(f"MOVE_TO_POSE did not finish within {self.position_timeout_sec}s")
-            return False
-        result = wrapped.result
-        if not result.success:
-            self.get_logger().error(
-                f"MOVE_TO_POSE failed: error_code={result.error_code} {result.message}"
-            )
-            return False
-        return True
-
-    def _ensure_on_ring(self, travel_direction: str) -> bool:
-        """Drive the robot onto the nearest ring point facing travel, if needed."""
+    def call(self) -> bool:
         rx, ry, ryaw = self._pose()
-        target = nearest_ring_pose(
-            self.loop.center_x, self.loop.center_y, self.loop.radius, rx, ry, travel_direction
-        )
-        dist_err = abs(math.hypot(rx - self.loop.center_x, ry - self.loop.center_y) - self.loop.radius)
-        yaw_err = _angle_diff(ryaw, target.yaw)
-        if dist_err <= self.loop.lane_width * 0.4 and yaw_err <= ALIGN_TOLERANCE_RAD:
-            self.get_logger().info(
-                f"Already on the loop (radial err {dist_err:.3f} m, yaw err "
-                f"{math.degrees(yaw_err):.0f} deg); skipping drive-on."
-            )
-            return True
-        self._set_manual_control(False)  # Kachaka autonomous nav owns the move
-        if not self._drive_to_pose(target.x, target.y, target.yaw):
+        travel_direction = self.ring.resolve_travel_direction(rx, ry)
+        if self.drive_onto_ring and not self.ring.ensure_on_ring(rx, ry, ryaw, travel_direction):
             return False
         self._refresh_odom()
-        return True
-
-    def call(self) -> bool:
-        rx, ry, _ = self._pose()
-        travel_direction = self._resolve_travel_direction(rx, ry)
-        if self.drive_onto_ring and not self._ensure_on_ring(travel_direction):
-            return False
         # Re-enable manual_control so Autoware cmd_vel reaches the robot on
         # change_to_autonomous (STOP mode still gates motion until then).
-        self._set_manual_control(True)
+        self.ring.set_manual_control(True)
 
         rx, ry, _ = self._pose()
         goal = compute_lap_goal(
