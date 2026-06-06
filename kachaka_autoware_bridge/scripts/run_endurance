@@ -21,6 +21,7 @@ Interfaces:
 import json
 import math
 import os
+import signal
 import sys
 import time
 from collections import Counter
@@ -60,7 +61,7 @@ from kachaka_autoware_bridge.loop_route import (
     compute_lap_goal,
     signed_progress,
 )
-from kachaka_autoware_bridge.ring_driver import RingDriver
+from kachaka_autoware_bridge.ring_driver import RADIAL_ON_RING_TOLERANCE_M, RingDriver
 from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
 from kachaka_autoware_maps.loop_map_gen import parse_loop_params
 
@@ -84,6 +85,19 @@ ARRIVE_TIMEOUT_SEC = 120.0       # ARRIVE backstop: advance even if RouteState.A
 HOP_SETTLE_SEC = 4.0             # CRUISE: robot stopped this long -> reached carrot, hop forward
 HOP_COOLDOWN_SEC = 3.0           # min spacing between carrot hops (route_state ARRIVED lags clear+set)
 MOVE_EPS_MPS = 0.03              # speed below this counts as stopped
+# Mid-RUNNING re-centering trigger: radial error this far off the loop centerline
+# re-enters ONTO_RING to reposition (bounds the sub-1 m loop's outward control
+# drift; see the M5 re-centering handoff). MUST exceed the on-ring tolerance, or a
+# robot left exactly at the tolerance would re-trigger forever -- so derive it from
+# the tolerance plus a hysteresis margin rather than hardcoding a bare number.
+RECENTER_TRIGGER_M = RADIAL_ON_RING_TOLERANCE_M + 0.03
+# After dropping to STOP for a re-route, the route's "in use" hold is released
+# slightly after the mode-change service returns, so the first clear_route can
+# still be rejected (code 50000). Retry a few times with a brief spin so the
+# carrot reliably advances instead of stalling for a hop cycle (a missed clear
+# leaves the robot rocking in place until it recovers).
+REROUTE_CLEAR_ATTEMPTS = 5
+REROUTE_CLEAR_BACKOFF_SEC = 0.4
 
 # AD-API status topics (route_state, operation_mode/state) and the external
 # velocity-limit input are published TRANSIENT_LOCAL (latched). A VOLATILE
@@ -197,6 +211,7 @@ class EnduranceNode(Node):
         self._onto_ring_failed = False
         self._onto_ring_attempts = 0
         self._next_onto_ring_wall = 0.0
+        self._recenter_count = 0
         self._current_step = None
         self._step_started_lap = 0.0
         self._carrot_goal_theta: float | None = None
@@ -266,6 +281,7 @@ class EnduranceNode(Node):
                     value=self._current_step.mode.value if self._current_step else "none",
                 ),
                 KeyValue(key="seed", value=str(self.seed)),
+                KeyValue(key="recenters", value=str(self._recenter_count)),
             ],
         )
         arr = DiagnosticArray()
@@ -312,6 +328,49 @@ class EnduranceNode(Node):
             return False
         return True
 
+    def _spin_for(self, seconds: float) -> None:
+        """Spin the node for a short window (process service callbacks / let an
+        async state change settle) without a blocking sleep."""
+        end = time.monotonic() + seconds
+        while rclpy.ok() and time.monotonic() < end:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def _clear_route(self) -> tuple[bool, object]:
+        """Clear the AD-API route. Returns (ok, code). Unlike _call this checks the
+        status: a route being followed is 'in use' and clear_route is rejected
+        (code 50000) -- silently discarding that (the old behaviour) left the route
+        set so the next set_route_points failed 'already set' (code 1)."""
+        if not self.clear_cli.wait_for_service(timeout_sec=SERVICE_TIMEOUT_SEC):
+            return False, "no-service"
+        fut = self.clear_cli.call_async(ClearRoute.Request())
+        rclpy.spin_until_future_complete(self, fut, timeout_sec=SERVICE_TIMEOUT_SEC)
+        resp = fut.result()
+        if resp is None or not resp.status.success:
+            return False, getattr(getattr(resp, "status", None), "code", "n/a")
+        return True, 0
+
+    def _reroute(self, goal) -> bool:
+        """Re-route to goal mid-run: STOP -> clear -> set. The route the robot is
+        following is 'in use' -- clear_route is rejected (code 50000) and
+        set_route_points then fails 'already set' (code 1), so the carrot can't
+        advance and the robot stalls in place oscillating. A real AUTONOMOUS->STOP
+        transition releases the in-use hold (confirmed on-robot); the robot is
+        already halted at the carrot when a hop fires, so this adds no motion. The
+        release lags the mode change, so retry the clear briefly. The caller
+        re-engages autonomous after the route is set."""
+        self._change_mode(False)
+        last_code = None
+        for _ in range(REROUTE_CLEAR_ATTEMPTS):
+            ok, last_code = self._clear_route()
+            if ok:
+                return self._set_route_to(goal)
+            self._spin_for(REROUTE_CLEAR_BACKOFF_SEC)
+        self.get_logger().warning(
+            f"reroute: clear_route still failing (code={last_code}) after "
+            f"{REROUTE_CLEAR_ATTEMPTS} tries; retrying next hop"
+        )
+        return False
+
     def _apply_velocity_limit(self, speed_mps: float) -> None:
         if self.vel_pub is None or self.velocity_limit_type is None:
             return
@@ -357,6 +416,16 @@ class EnduranceNode(Node):
         rs = self.latest_route_state
         return rs is not None and rs.state == RouteState.ARRIVED
 
+    def _radial_error(self) -> float:
+        """Absolute distance of the ego from the loop centerline (0 = on it). Used
+        to detect outward tracking drift during RUNNING so it can be re-centered."""
+        if self.latest_odom is None:
+            return 0.0
+        x, y, _ = self._pose()
+        return abs(
+            math.hypot(x - self.loop.center_x, y - self.loop.center_y) - self.loop.radius
+        )
+
     # ---- top-level tick ----
     def _tick(self) -> None:
         self._update_laps()
@@ -369,6 +438,17 @@ class EnduranceNode(Node):
             if transition.next_state is State.RECOVERING and self.state is State.RUNNING:
                 self._reengage_attempts = 0
                 self._next_recover_wall = 0.0
+            if transition.next_state is State.ONTO_RING and self.state is State.RUNNING:
+                # RUNNING -> ONTO_RING is a drift re-center (INIT -> ONTO_RING is the
+                # initial drive-on). Count it and emit before _execute runs the
+                # blocking MOVE_TO_POSE, so the event carries the pre-move drift.
+                self._recenter_count += 1
+                self._emit_event(
+                    "recenter",
+                    n=self._recenter_count,
+                    r_err=round(self._radial_error(), 3),
+                    lap=self.lap_accum_rad / (2.0 * math.pi),
+                )
             self._execute(transition)
             self.state = transition.next_state
         elif self.state is State.ONTO_RING:
@@ -436,7 +516,19 @@ class EnduranceNode(Node):
                 and not self._mode_is_autonomous()
                 and not self._route_arrived()
             )
-            return Observation(stop_request=stop, hard_fault=hard, transient_fault=transient)
+            # Off-ring drift: the ego has wandered off the centerline during a
+            # moving step (the sub-1 m loop's outward control drift). Gate it the
+            # same way as transient -- only while actually cruising and past the
+            # step-start settle window -- so the onto-ring->running handoff and the
+            # carrot-hop pauses don't trip it.
+            off_ring = (
+                self._in_moving_step()
+                and (now - self._step_started_wall) > STEP_SETTLE_SEC
+                and self._radial_error() > RECENTER_TRIGGER_M
+            )
+            return Observation(
+                stop_request=stop, hard_fault=hard, transient_fault=transient, off_ring=off_ring
+            )
         if self.state is State.RECOVERING:
             return Observation(
                 hard_fault=hard,
@@ -448,6 +540,14 @@ class EnduranceNode(Node):
     def _execute(self, transition) -> None:
         for action in transition.actions:
             if action is Action.DRIVE_ONTO_RING:
+                # Reset the onto-ring tier on every entry. When re-centering from
+                # RUNNING the flags are stale from the initial drive-on
+                # (_on_ring_flag is True), which would make ONTO_RING fall straight
+                # back to RUNNING without repositioning; resetting also gives each
+                # re-center a fresh retry/backoff budget.
+                self._on_ring_flag = False
+                self._onto_ring_failed = False
+                self._onto_ring_attempts = 0
                 self._do_onto_ring()
             elif action is Action.START_RUNNING:
                 self._begin_next_step()
@@ -526,10 +626,10 @@ class EnduranceNode(Node):
                 behind_angle_rad=2.0 * math.pi * step.extent,
                 travel_direction=self._travel_direction,
             )
-            # Clear the prior step's (possibly ARRIVED) route first, else AD-API
-            # rejects this set with code=1 (set over an active route).
-            self._call(self.clear_cli, ClearRoute.Request())
-            if not self._set_route_to(goal):
+            # Re-route via STOP -> clear -> set: the prior step's route may be
+            # in-use (settled but not ARRIVED), in which case a bare clear is
+            # rejected and the set then fails 'already set' (code 1). See _reroute.
+            if not self._reroute(goal):
                 # Route rejected: do not park on a goal-less ARRIVE step; advance.
                 self._emit_event("arrive_route_rejected")
                 self._begin_next_step()
@@ -538,19 +638,15 @@ class EnduranceNode(Node):
 
     def _place_carrot(self, robot_x: float, robot_y: float) -> float:
         """Place a carrot goal carrot_lead ahead of the robot; return its angular
-        position so the next ticks can decide when to refresh it.
-
-        AD-API rejects set_route_points over an active route (code=1), and a
-        carrot that has been reached leaves the route in SET/ARRIVED -- so a hop
-        must CLEAR the existing route before setting the next carrot. This runs as
-        a clear+set from the halt at the carrot; on the first carrot of a step the
-        clear is a harmless no-op (no route yet)."""
+        position so the next ticks can decide when to refresh it. Re-routes via
+        _reroute (stop -> clear -> set): the carrot route the robot is following is
+        'in use' and cannot be cleared/overwritten until a STOP transition releases
+        it, so a naive clear+set leaves the carrot frozen (see _reroute)."""
         goal = carrot_goal(
             self.loop.center_x, self.loop.center_y, self.loop.radius,
             robot_x, robot_y, self.carrot_lead, self._travel_direction,
         )
-        self._call(self.clear_cli, ClearRoute.Request())
-        self._set_route_to(goal)
+        self._reroute(goal)
         # Give the robot time to start moving toward the fresh carrot before the
         # stop-detector can fire again.
         self._last_moving_wall = time.monotonic()
@@ -615,6 +711,7 @@ class EnduranceNode(Node):
             step_histogram=dict(self._step_hist),
             seed=self.seed,
             fault_info=self._fault_info,
+            recenter_count=self._recenter_count,
         )
         out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
         out.write_text(record.to_json())
@@ -623,11 +720,27 @@ class EnduranceNode(Node):
 
 
 def main() -> int:
-    rclpy.init()
+    # Suppress rclpy's own SIGINT handler: it shuts the context down immediately,
+    # so the finally-block safe stop below would see rclpy.ok() == False and skip
+    # -- leaving the robot AUTONOMOUS after a Ctrl-C/kill. Instead handle the
+    # signals ourselves, break the loop cleanly with the context still alive, and
+    # let the finally block actually send change_to_stop.
+    try:
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    except (ImportError, TypeError):  # older rclpy: fall back to default handling
+        rclpy.init()
     node = None
+    shutdown = {"requested": False}
+
+    def _request_shutdown(_signum, _frame) -> None:
+        shutdown["requested"] = True
+
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
     try:
         node = EnduranceNode()
-        while rclpy.ok() and not node._done:
+        while rclpy.ok() and not node._done and not shutdown["requested"]:
             rclpy.spin_once(node, timeout_sec=0.1)  # service subscriptions
             node._tick()                            # advance the state machine
         return 0
