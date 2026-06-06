@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="server_uri" description="Kachaka gRPC endpoint host:port (e.g. 192.168.1.101:26400)"/>
+  <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
+       description="Directory with the generated loop map (lanelet2_map.osm + loop_params.yaml)."/>
+  <arg name="seed" default="12345"/>
+  <arg name="max_duration_sec" default="0.0"
+       description="Built-in DURATION stop after N seconds; 0 = rely on SP4/operator."/>
+  <arg name="launch_rviz" default="false"/>
+
+  <!-- Full M1-M4 stock stack: bridge + localization + control + planning + AD-API. -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/kachaka_autoware_2d.launch.xml">
+    <arg name="server_uri" value="$(var server_uri)"/>
+    <arg name="launch_control" value="true"/>
+    <arg name="launch_planning" value="true"/>
+    <arg name="launch_api" value="true"/>
+    <arg name="launch_rviz" value="$(var launch_rviz)"/>
+    <arg name="map_path" value="$(var map_path)"/>
+  </include>
+
+  <!-- Endurance orchestrator. -->
+  <node pkg="kachaka_autoware_bridge" exec="run_endurance" name="run_endurance" output="screen">
+    <param from="$(find-pkg-share kachaka_autoware_bridge)/config/endurance.param.yaml"/>
+    <param name="loop_params_path" value="$(var map_path)/loop_params.yaml"/>
+    <param name="seed" value="$(var seed)"/>
+    <param name="max_duration_sec" value="$(var max_duration_sec)"/>
+  </node>
+</launch>
