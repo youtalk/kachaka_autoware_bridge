@@ -67,3 +67,46 @@ Kachaka reachable (verify the DHCP IP; default `192.168.1.101:26400`).
 
 Safety: the vehicle interface forwards velocity **only while AUTONOMOUS** and
 has a zero-Twist watchdog; Kachaka also has a built-in front-obstacle stop.
+
+## Endurance run (M5)
+
+Long-term, unattended multi-lap test harness on the stock closed loop. Drives the
+loop continuously while a seeded scenario scheduler varies speed, inserts
+stop-and-go dwells, and periodically does a real goal arrival; recovers from
+transient faults; halts-and-captures on hard faults; and stops gracefully on a
+duration/operator (later: battery) signal.
+
+Prerequisites: a generated loop map (see "Stock closed loop (no 3D LiDAR) — drive a
+lap"), robot off-dock, packages built and `source install/setup.zsh`.
+
+1. **Bring up the full stack + orchestrator:**
+
+   ```bash
+   ros2 launch kachaka_autoware_bridge endurance.launch.xml \
+     server_uri:=192.168.1.101:26400 map_path:=$HOME/maps/kachaka_loop \
+     seed:=12345 max_duration_sec:=1800
+   ```
+
+   The orchestrator drives onto the ring, then runs laps. With
+   `max_duration_sec:=1800` it stops gracefully after 30 min; `0` runs until a
+   stop is requested.
+
+2. **Stop gracefully at any time:**
+
+   ```bash
+   ros2 service call /run_endurance/stop_graceful std_srvs/srv/Trigger {}
+   ```
+
+3. **Watch progress:**
+
+   ```bash
+   ros2 topic echo /run_endurance/event              # state transitions, steps, faults
+   ros2 topic echo /diagnostics --once               # endurance_orchestrator status
+   ```
+
+   A session record JSON is written to `~/endurance_runs/` on exit (laps, stop
+   reason, scenario histogram, seed, any fault info).
+
+Safety: the vehicle interface forwards velocity **only while AUTONOMOUS** and
+has a zero-Twist watchdog; Kachaka also has a built-in front-obstacle stop, so an
+orchestrator crash cannot drive the robot.

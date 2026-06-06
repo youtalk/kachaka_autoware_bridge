@@ -3,7 +3,27 @@
   <arg name="vehicle_info_param_file"
        default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
 
-  <include file="$(find-pkg-share autoware_core_control)/launch/autoware_core_control.launch.xml">
-    <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
-  </include>
+  <!-- kachaka_autoware: we launch simple_pure_pursuit directly (instead of
+       including autoware_core_control.launch.xml) so we can shrink the lookahead
+       to the loop scale. The upstream defaults (lookahead_min_distance 1.0 m,
+       lookahead_gain 1.0) are road-scaled: on Kachaka's ~0.81 m-radius loop a
+       1.0 m+ lookahead puts the aim point ~80 deg around the ring, so cross-track
+       corrections are far too sluggish and the robot drifts outward off the
+       loop. min 0.4 m + 0.5*v keeps the aim point ~35 deg ahead at cruise.
+       (Reduces, does not eliminate, the sub-1 m-loop tracking drift; see the
+       M5 known-limitation note.) The node wiring mirrors
+       autoware_core_control.launch.xml. -->
+  <group>
+    <push-ros-namespace namespace="control"/>
+    <node pkg="autoware_simple_pure_pursuit" exec="autoware_simple_pure_pursuit_exe" name="simple_pure_pursuit" output="screen">
+      <param from="$(find-pkg-share autoware_core_control)/config/simple_pure_pursuit.param.yaml"/>
+      <param from="$(var vehicle_info_param_file)"/>
+      <param name="lookahead_min_distance" value="0.4"/>
+      <param name="lookahead_gain" value="0.5"/>
+
+      <remap from="~/input/odometry" to="/localization/kinematic_state"/>
+      <remap from="~/input/trajectory" to="/planning/trajectory"/>
+      <remap from="~/output/control_command" to="/control/command/control_cmd"/>
+    </node>
+  </group>
 </launch>

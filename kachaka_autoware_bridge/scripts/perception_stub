@@ -44,15 +44,25 @@ class PerceptionStub(Node):
         self.pointcloud_frame = str(self.get_parameter("pointcloud_frame").value)
         rate_hz = max(float(self.get_parameter("rate_hz").value), 0.1)
 
-        # Sensor-style QoS: best effort, volatile, depth 1 (matches what the
-        # planners' perception subscriptions expect).
+        # The pointcloud is sensor-style (best effort, volatile); the planners'
+        # pointcloud subscriptions accept best effort. The PredictedObjects topic,
+        # however, is consumed RELIABLE by behavior_velocity_planner and
+        # motion_velocity_planner, so a best-effort objects publisher is dropped
+        # and they wait for predicted objects forever (empty trajectory, no
+        # motion). Publish objects RELIABLE to match the planner subscriptions.
         sensor_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             durability=QoSDurabilityPolicy.VOLATILE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self.objects_pub = self.create_publisher(PredictedObjects, objects_topic, sensor_qos)
+        reliable_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.objects_pub = self.create_publisher(PredictedObjects, objects_topic, reliable_qos)
         self.pointcloud_pub = self.create_publisher(PointCloud2, pointcloud_topic, sensor_qos)
         self.create_timer(1.0 / rate_hz, self._publish)
         self.get_logger().info(
