@@ -76,10 +76,13 @@ SERVICE_TIMEOUT_SEC = 10.0
 ODOM_STALE_SEC = 5.0              # no /localization/kinematic_state this long -> hard fault
 RECOVER_BACKOFF_SEC = 2.0        # re-engage retry spacing in RECOVERING
 MAX_REENGAGE_ATTEMPTS = 3        # exceeded -> hard fault
+ONTO_RING_MAX_ATTEMPTS = 4       # onto-ring drive-on retries before a hard fault
+ONTO_RING_BACKOFF_SEC = 5.0      # spacing between onto-ring retries (lets Kachaka nav recover)
 STEP_SETTLE_SEC = 3.0            # ignore mode!=AUTONOMOUS this long after a step begins
 SET_CLI_STALE_SEC = 5.0  # set_route service not-ready this long -> hard fault (debounce DDS flaps)
 ARRIVE_TIMEOUT_SEC = 120.0       # ARRIVE backstop: advance even if RouteState.ARRIVED never fires
 HOP_SETTLE_SEC = 4.0             # CRUISE: robot stopped this long -> reached carrot, hop forward
+HOP_COOLDOWN_SEC = 3.0           # min spacing between carrot hops (route_state ARRIVED lags clear+set)
 MOVE_EPS_MPS = 0.03              # speed below this counts as stopped
 
 # AD-API status topics (route_state, operation_mode/state) and the external
@@ -123,7 +126,7 @@ class EnduranceNode(Node):
         )
         self.declare_parameter("seed", 12345)
         self.declare_parameter("max_duration_sec", 0.0)
-        self.declare_parameter("carrot_lead_fraction", 0.75)
+        self.declare_parameter("carrot_lead_fraction", 0.25)
         self.declare_parameter("carrot_refresh_fraction", 0.30)
         self.declare_parameter("bringup_timeout_sec", 60.0)
         self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
@@ -192,9 +195,12 @@ class EnduranceNode(Node):
         # sets these flags for the next observation.
         self._on_ring_flag = False
         self._onto_ring_failed = False
+        self._onto_ring_attempts = 0
+        self._next_onto_ring_wall = 0.0
         self._current_step = None
         self._step_started_lap = 0.0
         self._carrot_goal_theta: float | None = None
+        self._next_hop_wall = 0.0
         self._dwell_deadline = 0.0
         self._bringup_deadline = self.start_wall + self.bringup_timeout_sec
         self._last_odom_wall = self.start_wall
@@ -365,6 +371,8 @@ class EnduranceNode(Node):
                 self._next_recover_wall = 0.0
             self._execute(transition)
             self.state = transition.next_state
+        elif self.state is State.ONTO_RING:
+            self._onto_ring_tick()
         elif self.state is State.RUNNING:
             self._run_scenario_tick()
         elif self.state is State.RECOVERING:
@@ -415,6 +423,7 @@ class EnduranceNode(Node):
             return Observation(
                 on_ring=self._on_ring_flag,
                 onto_ring_failed=self._onto_ring_failed,
+                onto_ring_exhausted=self._onto_ring_attempts >= ONTO_RING_MAX_ATTEMPTS,
                 hard_fault=hard,
             )
         if self.state is State.RUNNING:
@@ -461,17 +470,34 @@ class EnduranceNode(Node):
                 self._write_session_record(transition.stop_reason)
 
     def _do_onto_ring(self) -> None:
-        if self.latest_odom is None:
-            self._onto_ring_failed = True
-            return
-        rx, ry, ryaw = self._pose()
-        self._travel_direction = self.ring.resolve_travel_direction(rx, ry)
-        ok = self.ring.ensure_on_ring(rx, ry, ryaw, self._travel_direction)
+        """One onto-ring drive-on attempt. On failure, schedule a backoff retry;
+        the FSM only hard-faults once ONTO_RING_MAX_ATTEMPTS are spent (a Kachaka
+        MOVE_TO_POSE abort is treated as transient, not run-ending)."""
+        self._onto_ring_attempts += 1
+        self._next_onto_ring_wall = time.monotonic() + ONTO_RING_BACKOFF_SEC
+        ok = False
+        if self.latest_odom is not None:
+            rx, ry, ryaw = self._pose()
+            self._travel_direction = self.ring.resolve_travel_direction(rx, ry)
+            ok = self.ring.ensure_on_ring(rx, ry, ryaw, self._travel_direction)
         if ok:
             self.ring.set_manual_control(True)
             self._on_ring_flag = True
+            self._onto_ring_failed = False
         else:
             self._onto_ring_failed = True
+            self._emit_event(
+                "onto_ring_attempt_failed",
+                n=self._onto_ring_attempts,
+                exhausted=self._onto_ring_attempts >= ONTO_RING_MAX_ATTEMPTS,
+            )
+
+    def _onto_ring_tick(self) -> None:
+        """Retry the onto-ring drive-on with backoff until on-ring or exhausted."""
+        if self._on_ring_flag or self._onto_ring_attempts >= ONTO_RING_MAX_ATTEMPTS:
+            return
+        if time.monotonic() >= self._next_onto_ring_wall:
+            self._do_onto_ring()
 
     # ---- RUNNING scenario executor ----
     def _begin_next_step(self) -> None:
@@ -500,6 +526,9 @@ class EnduranceNode(Node):
                 behind_angle_rad=2.0 * math.pi * step.extent,
                 travel_direction=self._travel_direction,
             )
+            # Clear the prior step's (possibly ARRIVED) route first, else AD-API
+            # rejects this set with code=1 (set over an active route).
+            self._call(self.clear_cli, ClearRoute.Request())
             if not self._set_route_to(goal):
                 # Route rejected: do not park on a goal-less ARRIVE step; advance.
                 self._emit_event("arrive_route_rejected")
@@ -509,11 +538,18 @@ class EnduranceNode(Node):
 
     def _place_carrot(self, robot_x: float, robot_y: float) -> float:
         """Place a carrot goal carrot_lead ahead of the robot; return its angular
-        position so the next ticks can decide when to refresh it."""
+        position so the next ticks can decide when to refresh it.
+
+        AD-API rejects set_route_points over an active route (code=1), and a
+        carrot that has been reached leaves the route in SET/ARRIVED -- so a hop
+        must CLEAR the existing route before setting the next carrot. This runs as
+        a clear+set from the halt at the carrot; on the first carrot of a step the
+        clear is a harmless no-op (no route yet)."""
         goal = carrot_goal(
             self.loop.center_x, self.loop.center_y, self.loop.radius,
             robot_x, robot_y, self.carrot_lead, self._travel_direction,
         )
+        self._call(self.clear_cli, ClearRoute.Request())
         self._set_route_to(goal)
         # Give the robot time to start moving toward the fresh carrot before the
         # stop-detector can fire again.
@@ -538,12 +574,18 @@ class EnduranceNode(Node):
             # reason to stop in CRUISE is reaching the carrot, and clear+set from
             # a halt succeeds. The step ends once its lap extent is met.
             settled = (time.monotonic() - self._last_moving_wall) > HOP_SETTLE_SEC
-            if self._route_arrived() or settled:
+            if (self._route_arrived() or settled) and time.monotonic() >= self._next_hop_wall:
                 if (self.lap_accum_rad - self._step_started_lap) >= 2.0 * math.pi * step.extent:
                     self._begin_next_step()
                     return
+                self._emit_event(
+                    "carrot_hop",
+                    lap=self.lap_accum_rad / (2.0 * math.pi),
+                    arrived=self._route_arrived(),
+                )
                 self._carrot_goal_theta = self._place_carrot(x, y)
                 self._change_mode(True)
+                self._next_hop_wall = time.monotonic() + HOP_COOLDOWN_SEC
         elif step.mode is StepMode.ARRIVE:
             rs = self.latest_route_state
             if rs is not None and rs.state == RouteState.ARRIVED:

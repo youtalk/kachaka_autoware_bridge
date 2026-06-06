@@ -44,6 +44,12 @@ DEFAULT_COMMAND_ACTION = "/kachaka/kachaka_command/execute"
 DEFAULT_MANUAL_CONTROL_SERVICE = "/kachaka/manual_control/set_enabled"
 DEFAULT_SERVICE_TIMEOUT_SEC = 10.0
 ALIGN_TOLERANCE_RAD = math.radians(60.0)  # route_handler gate is 90 deg; keep margin
+# Radial "already on the ring" tolerance. Must be a fixed PHYSICAL distance, not
+# lane_width-scaled: the lane is drawn wide (1.3 m) only so path_generator's
+# goal-connection stays inside it, but a robot >~0.15 m off the centerline on the
+# tight loop is drifting toward a wall and must be driven back onto the centerline
+# (lane_width*0.4 = 0.52 m let a wall-wedged robot "skip" repositioning -> stall).
+RADIAL_ON_RING_TOLERANCE_M = 0.15
 
 
 def _angle_diff(a: float, b: float) -> float:
@@ -183,7 +189,7 @@ class RingDriver:
             - self._loop.radius
         )
         yaw_err = _angle_diff(robot_yaw, target.yaw)
-        if dist_err <= self._loop.lane_width * 0.4 and yaw_err <= ALIGN_TOLERANCE_RAD:
+        if dist_err <= RADIAL_ON_RING_TOLERANCE_M and yaw_err <= ALIGN_TOLERANCE_RAD:
             self._log.info(
                 f"Already on the loop (radial err {dist_err:.3f} m, yaw err "
                 f"{math.degrees(yaw_err):.0f} deg); skipping drive-on."

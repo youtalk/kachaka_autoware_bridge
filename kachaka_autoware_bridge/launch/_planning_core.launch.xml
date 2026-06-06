@@ -183,6 +183,17 @@
       <!-- kachaka_autoware: see fix 1 above. -->
       <param from="$(var vehicle_param_file)"/>
 
+      <!-- kachaka_autoware: the velocity_smoother defaults are road-scaled and
+           break Kachaka's tight (~0.81 m radius) loop. engage_velocity 0.25 is a
+           hard floor: the robot cannot start below it, yet the tight curve is
+           only trackable at <~0.24 m/s, so the road default forces an
+           un-trackable startup speed. max_vel/lateral-accel let the trajectory
+           reach ~0.4 m/s where simple_pure_pursuit under-steers off the loop.
+           Cap cruise low and let it engage slowly. (Reduces, does not eliminate,
+           the sub-1 m-loop tracking drift; see the M5 known-limitation note.) -->
+      <param name="engage_velocity" value="0.1"/>
+      <param name="max_vel" value="0.18"/>
+
       <param name="publish_debug_trajs" value="false"/>
       <remap from="~/input/trajectory" to="/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/trajectory"/>
       <remap from="~/output/trajectory" to="/planning/trajectory"/>

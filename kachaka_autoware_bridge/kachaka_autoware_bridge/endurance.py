@@ -124,6 +124,7 @@ class Observation:
     bringup_timed_out: bool = False
     on_ring: bool = False
     onto_ring_failed: bool = False
+    onto_ring_exhausted: bool = False
     hard_fault: bool = False
     transient_fault: bool = False
     recovered: bool = False
@@ -170,7 +171,13 @@ def decide_transition(state: State, obs: Observation) -> Transition:
         return Transition(State.INIT)
 
     if state is State.ONTO_RING:
-        if obs.onto_ring_failed:
+        # Onto-ring is a TRANSIENT tier: a Kachaka MOVE_TO_POSE abort (conservative
+        # near walls / a transient nav bad-state) must not instantly kill an
+        # unattended run. The shell retries the drive-on with backoff; only after
+        # the bounded retries are exhausted does a still-failing onto-ring become a
+        # hard fault. A bare onto_ring_failed (retries remaining) stays in ONTO_RING
+        # so the shell re-attempts.
+        if obs.onto_ring_failed and obs.onto_ring_exhausted:
             return Transition(State.FAULT, _FAULT_ACTIONS, StopReason.FAULT)
         if obs.on_ring:
             return Transition(State.RUNNING, (Action.START_RUNNING,))

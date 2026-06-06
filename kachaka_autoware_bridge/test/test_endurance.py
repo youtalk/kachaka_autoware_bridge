@@ -103,8 +103,20 @@ def test_onto_ring_success_and_failure() -> None:
     t_ok = decide_transition(State.ONTO_RING, Observation(on_ring=True))
     assert t_ok.next_state is State.RUNNING
     assert Action.START_RUNNING in t_ok.actions
-    t_bad = decide_transition(State.ONTO_RING, Observation(onto_ring_failed=True))
+    # A failed drive-on with retries remaining is transient: stay in ONTO_RING so
+    # the shell re-attempts with backoff (one MOVE_TO_POSE abort must not kill the run).
+    t_retry = decide_transition(State.ONTO_RING, Observation(onto_ring_failed=True))
+    assert t_retry.next_state is State.ONTO_RING
+    assert t_retry.actions == ()
+    # Only once the bounded retries are exhausted does it become a hard fault.
+    t_bad = decide_transition(
+        State.ONTO_RING, Observation(onto_ring_failed=True, onto_ring_exhausted=True)
+    )
     assert t_bad.next_state is State.FAULT
+    assert t_bad.stop_reason is StopReason.FAULT
+    # Exhausted but not (yet) failed on the latest attempt -> keep trying, no fault.
+    t_exh_only = decide_transition(State.ONTO_RING, Observation(onto_ring_exhausted=True))
+    assert t_exh_only.next_state is State.ONTO_RING
 
 
 def test_running_stop_request_goes_to_stopping_with_reason() -> None:

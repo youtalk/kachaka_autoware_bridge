@@ -2,7 +2,12 @@
   ros__parameters:
     seed: 12345
     max_duration_sec: 0.0          # 0 = no built-in cap (defer to SP4 / operator)
-    carrot_lead_fraction: 0.75
+    # 0.75 parks the carrot ~270 deg around the tight (~0.81 m radius) loop, where
+    # the path_generator goal-connection bows inward AND a boundary intersection cut
+    # chops the path to ~0.5 m -- too short to accelerate, so the robot crawls and
+    # drifts in (was issue C). 0.25 keeps the carrot in the clean forward zone:
+    # offline-validated centerline cruise @0.4 m/s that self-corrects from drift.
+    carrot_lead_fraction: 0.25
     carrot_refresh_fraction: 0.30
     bringup_timeout_sec: 60.0
     loop_params_path: ""           # empty -> node default (~/maps/kachaka_loop/loop_params.yaml)
