@@ -34,6 +34,12 @@ from autoware_adapi_v1_msgs.msg import OperationModeState
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -52,7 +58,6 @@ from kachaka_autoware_bridge.loop_route import (
     angular_position,
     carrot_goal,
     compute_lap_goal,
-    should_refresh_carrot,
     signed_progress,
 )
 from kachaka_autoware_bridge.ring_driver import RingDriver
@@ -64,7 +69,7 @@ CLEAR_ROUTE_SERVICE = "/api/routing/clear_route"
 TO_AUTONOMOUS_SERVICE = "/system/operation_mode/change_to_autonomous"
 TO_STOP_SERVICE = "/system/operation_mode/change_to_stop"
 ODOM_TOPIC = "/localization/kinematic_state"
-ROUTE_STATE_TOPIC = "/planning/route_state"
+ROUTE_STATE_TOPIC = "/api/routing/state"
 OPERATION_MODE_TOPIC = "/system/operation_mode/state"
 VELOCITY_LIMIT_TOPIC = "/planning/scenario_planning/max_velocity_default"
 SERVICE_TIMEOUT_SEC = 10.0
@@ -74,6 +79,19 @@ MAX_REENGAGE_ATTEMPTS = 3        # exceeded -> hard fault
 STEP_SETTLE_SEC = 3.0            # ignore mode!=AUTONOMOUS this long after a step begins
 SET_CLI_STALE_SEC = 5.0  # set_route service not-ready this long -> hard fault (debounce DDS flaps)
 ARRIVE_TIMEOUT_SEC = 120.0       # ARRIVE backstop: advance even if RouteState.ARRIVED never fires
+HOP_SETTLE_SEC = 4.0             # CRUISE: robot stopped this long -> reached carrot, hop forward
+MOVE_EPS_MPS = 0.03              # speed below this counts as stopped
+
+# AD-API status topics (route_state, operation_mode/state) and the external
+# velocity-limit input are published TRANSIENT_LOCAL (latched). A VOLATILE
+# subscriber misses the latched value, and a VOLATILE publisher is rejected by a
+# TRANSIENT_LOCAL subscriber, so use a matching latched profile for them.
+LATCHED_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 def _now_iso() -> str:
@@ -137,8 +155,8 @@ class EnduranceNode(Node):
         self.latest_route_state: RouteState | None = None
         self.latest_mode: OperationModeState | None = None
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, 1)
-        self.create_subscription(RouteState, ROUTE_STATE_TOPIC, self._on_route_state, 1)
-        self.create_subscription(OperationModeState, OPERATION_MODE_TOPIC, self._on_mode, 1)
+        self.create_subscription(RouteState, ROUTE_STATE_TOPIC, self._on_route_state, LATCHED_QOS)
+        self.create_subscription(OperationModeState, OPERATION_MODE_TOPIC, self._on_mode, LATCHED_QOS)
 
         # Clients
         self.set_cli = self.create_client(SetRoutePoints, SET_ROUTE_SERVICE)
@@ -150,7 +168,7 @@ class EnduranceNode(Node):
         self.diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self.event_pub = self.create_publisher(String, "~/event", 10)
         if self.velocity_limit_type is not None:
-            self.vel_pub = self.create_publisher(self.velocity_limit_type, VELOCITY_LIMIT_TOPIC, 1)
+            self.vel_pub = self.create_publisher(self.velocity_limit_type, VELOCITY_LIMIT_TOPIC, LATCHED_QOS)
         else:
             self.vel_pub = None
             self.get_logger().warning(f"speed actuation disabled: {self._vel_warn}")
@@ -169,6 +187,7 @@ class EnduranceNode(Node):
         self._step_hist: Counter = Counter()
         self._fault_info: str | None = None
         self._travel_direction = self.loop.travel_direction
+        self._last_moving_wall = self.start_wall
         # onto-ring is executed synchronously by the DRIVE_ONTO_RING action, which
         # sets these flags for the next observation.
         self._on_ring_flag = False
@@ -313,6 +332,8 @@ class EnduranceNode(Node):
         if self._prev_theta is not None:
             self.lap_accum_rad += signed_progress(self._prev_theta, theta, self._travel_direction)
         self._prev_theta = theta
+        if abs(self.latest_odom.twist.twist.linear.x) >= MOVE_EPS_MPS:
+            self._last_moving_wall = time.monotonic()
 
     def _mode_is_autonomous(self) -> bool:
         return (
@@ -325,6 +346,10 @@ class EnduranceNode(Node):
             StepMode.CRUISE,
             StepMode.ARRIVE,
         )
+
+    def _route_arrived(self) -> bool:
+        rs = self.latest_route_state
+        return rs is not None and rs.state == RouteState.ARRIVED
 
     # ---- top-level tick ----
     def _tick(self) -> None:
@@ -400,6 +425,7 @@ class EnduranceNode(Node):
                 self._in_moving_step()
                 and (now - self._step_started_wall) > STEP_SETTLE_SEC
                 and not self._mode_is_autonomous()
+                and not self._route_arrived()
             )
             return Observation(stop_request=stop, hard_fault=hard, transient_fault=transient)
         if self.state is State.RECOVERING:
@@ -489,6 +515,9 @@ class EnduranceNode(Node):
             robot_x, robot_y, self.carrot_lead, self._travel_direction,
         )
         self._set_route_to(goal)
+        # Give the robot time to start moving toward the fresh carrot before the
+        # stop-detector can fire again.
+        self._last_moving_wall = time.monotonic()
         return angular_position(self.loop.center_x, self.loop.center_y, goal.x, goal.y)
 
     def _run_scenario_tick(self) -> None:
@@ -502,14 +531,19 @@ class EnduranceNode(Node):
                 self._begin_next_step()
             return
         x, y, _ = self._pose()
-        theta = angular_position(self.loop.center_x, self.loop.center_y, x, y)
         if step.mode is StepMode.CRUISE:
-            if self._carrot_goal_theta is not None and should_refresh_carrot(
-                theta, self._carrot_goal_theta, self._travel_direction, self.carrot_refresh
-            ):
+            # This AD-API rejects re-routing while driving and does not reliably
+            # flip route_state to ARRIVED at the goal, so hop the carrot forward
+            # once the robot has reached it and settled (stopped) -- the only
+            # reason to stop in CRUISE is reaching the carrot, and clear+set from
+            # a halt succeeds. The step ends once its lap extent is met.
+            settled = (time.monotonic() - self._last_moving_wall) > HOP_SETTLE_SEC
+            if self._route_arrived() or settled:
+                if (self.lap_accum_rad - self._step_started_lap) >= 2.0 * math.pi * step.extent:
+                    self._begin_next_step()
+                    return
                 self._carrot_goal_theta = self._place_carrot(x, y)
-            if (self.lap_accum_rad - self._step_started_lap) >= 2.0 * math.pi * step.extent:
-                self._begin_next_step()
+                self._change_mode(True)
         elif step.mode is StepMode.ARRIVE:
             rs = self.latest_route_state
             if rs is not None and rs.state == RouteState.ARRIVED:
