@@ -10,9 +10,14 @@ from kachaka_autoware_bridge.loop_route import (
     COUNTERCLOCKWISE,
     GoalPose,
     _normalize_angle,
+    angular_position,
+    carrot_goal,
     compute_lap_goal,
     nearest_ring_pose,
+    remaining_arc,
     ring_pose_at,
+    should_refresh_carrot,
+    signed_progress,
     travel_direction_from_tangent,
 )
 
@@ -144,3 +149,118 @@ def test_normalize_angle_boundaries() -> None:
         3.0 * math.pi
     ) == pytest.approx(-math.pi)
     assert _normalize_angle(-math.pi / 2) == pytest.approx(-math.pi / 2)
+
+
+# ---------------------------------------------------------------------------
+# Task A1: angular_position and carrot_goal
+# ---------------------------------------------------------------------------
+
+
+def test_angular_position_offset_center() -> None:
+    # Point due north of an offset centre -> +pi/2.
+    assert angular_position(2.0, -1.0, 2.0, 0.0) == pytest.approx(math.pi / 2)
+
+
+def test_carrot_goal_is_ahead_in_travel_direction() -> None:
+    # CW (default): robot east of centre (theta=0); the carrot sits AHEAD, i.e.
+    # at -lead (CW decreases theta), on the ring, facing the CW tangent.
+    g = carrot_goal(0.0, 0.0, 1.0, robot_x=1.0, robot_y=0.0, lead_angle_rad=math.pi / 2)
+    assert g.x == pytest.approx(math.cos(-math.pi / 2))
+    assert g.y == pytest.approx(math.sin(-math.pi / 2))
+    assert g.yaw == pytest.approx(_normalize_angle(-math.pi / 2 - math.pi / 2))
+
+
+def test_carrot_goal_ccw_is_ahead_the_other_way() -> None:
+    g = carrot_goal(
+        0.0, 0.0, 1.0, robot_x=1.0, robot_y=0.0,
+        lead_angle_rad=math.pi / 2, travel_direction=COUNTERCLOCKWISE,
+    )
+    assert g.x == pytest.approx(math.cos(math.pi / 2))
+    assert g.y == pytest.approx(math.sin(math.pi / 2))
+
+
+def test_carrot_goal_is_anti_position_of_lap_goal_sign() -> None:
+    # carrot is ahead, compute_lap_goal is behind: at the same robot/lead the two
+    # angular positions straddle the robot.
+    lead = math.pi / 4
+    carrot = carrot_goal(0.0, 0.0, 1.0, 1.0, 0.0, lead_angle_rad=lead)  # CW -> -lead
+    behind = compute_lap_goal(0.0, 0.0, 1.0, 1.0, 0.0, behind_angle_rad=lead)  # CW -> +lead
+    assert math.atan2(carrot.y, carrot.x) == pytest.approx(-lead)
+    assert math.atan2(behind.y, behind.x) == pytest.approx(lead)
+
+
+def test_carrot_goal_invalid_lead_raises() -> None:
+    with pytest.raises(ValueError):
+        carrot_goal(0.0, 0.0, 1.0, 1.0, 0.0, lead_angle_rad=0.0)
+    with pytest.raises(ValueError):
+        carrot_goal(0.0, 0.0, 1.0, 1.0, 0.0, lead_angle_rad=7.0)  # > 2*pi
+    with pytest.raises(ValueError):
+        carrot_goal(0.0, 0.0, 0.0, 1.0, 0.0, lead_angle_rad=1.0)  # radius <= 0
+
+
+# ---------------------------------------------------------------------------
+# Task A2: signed_progress
+# ---------------------------------------------------------------------------
+
+
+def test_signed_progress_forward_is_positive_each_direction() -> None:
+    # CW travel decreases theta: a step from 0.0 to -0.1 is +0.1 forward.
+    assert signed_progress(0.0, -0.1, CLOCKWISE) == pytest.approx(0.1)
+    # CCW travel increases theta: 0.0 -> +0.1 is +0.1 forward.
+    assert signed_progress(0.0, 0.1, COUNTERCLOCKWISE) == pytest.approx(0.1)
+
+
+def test_signed_progress_backward_is_negative() -> None:
+    assert signed_progress(0.0, 0.1, CLOCKWISE) == pytest.approx(-0.1)
+
+
+def test_signed_progress_wraps_across_pi() -> None:
+    # CW crossing the -pi/+pi seam: -3.0 -> 3.0 is a small forward step, not -6.
+    p = signed_progress(-3.0, 3.0, CLOCKWISE)
+    assert p == pytest.approx(2.0 * math.pi - 6.0)
+    assert 0.0 < p < 0.5
+
+
+def test_signed_progress_accumulates_to_one_lap() -> None:
+    # Eight CW steps of -pi/4 sum to one full lap (2*pi) of forward progress.
+    thetas = [(-k) * math.pi / 4 for k in range(9)]
+    total = sum(
+        signed_progress(thetas[i], thetas[i + 1], CLOCKWISE) for i in range(8)
+    )
+    assert total == pytest.approx(2.0 * math.pi)
+
+
+# ---------------------------------------------------------------------------
+# Task A3: remaining_arc and should_refresh_carrot
+# ---------------------------------------------------------------------------
+
+
+def test_remaining_arc_shrinks_as_robot_advances_cw() -> None:
+    # CW, goal 1.5 rad ahead of theta=0 sits at theta=-1.5.
+    assert remaining_arc(0.0, -1.5, CLOCKWISE) == pytest.approx(1.5)
+    # Robot advances to theta=-1.4 -> only 0.1 left.
+    assert remaining_arc(-1.4, -1.5, CLOCKWISE) == pytest.approx(0.1)
+
+
+def test_remaining_arc_is_in_zero_two_pi() -> None:
+    r = remaining_arc(0.2, 0.1, COUNTERCLOCKWISE)  # goal just behind -> almost a full lap
+    assert 0.0 <= r < 2.0 * math.pi
+    assert r == pytest.approx(2.0 * math.pi - 0.1)
+
+
+def test_should_refresh_when_within_threshold() -> None:
+    assert should_refresh_carrot(-1.45, -1.5, CLOCKWISE, refresh_angle_rad=0.1) is True
+    assert should_refresh_carrot(-0.5, -1.5, CLOCKWISE, refresh_angle_rad=0.1) is False
+
+
+def test_signed_and_arc_reject_unknown_direction() -> None:
+    with pytest.raises(ValueError):
+        signed_progress(0.0, 0.1, "sideways")
+    with pytest.raises(ValueError):
+        remaining_arc(0.0, 0.1, "")
+
+
+def test_should_refresh_ccw_direction() -> None:
+    # CCW: goal 0.05 rad ahead (theta increases) -> within a 0.1 threshold.
+    assert should_refresh_carrot(0.0, 0.05, COUNTERCLOCKWISE, refresh_angle_rad=0.1) is True
+    assert should_refresh_carrot(0.0, 1.5, COUNTERCLOCKWISE, refresh_angle_rad=0.1) is False
