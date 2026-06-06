@@ -132,6 +132,38 @@ def test_running_transient_fault_goes_to_recovering() -> None:
     assert t.next_state is State.RECOVERING
 
 
+def test_running_off_ring_recenters_via_onto_ring() -> None:
+    # Drifting beyond the radial trigger during RUNNING re-centers by re-entering
+    # the (already tested) ONTO_RING path; ONTO_RING -> RUNNING on on_ring then
+    # resumes cruising, so the accumulating outward drift is bounded.
+    t = decide_transition(State.RUNNING, Observation(off_ring=True))
+    assert t.next_state is State.ONTO_RING
+    assert Action.DRIVE_ONTO_RING in t.actions
+
+
+def test_off_ring_is_the_lowest_priority_running_corrective() -> None:
+    # Re-centering must not preempt a hard fault, an operator/duration stop, or a
+    # transient mode-drop recovery (hard_fault > stop > transient > re-center).
+    assert (
+        decide_transition(
+            State.RUNNING, Observation(off_ring=True, hard_fault=True)
+        ).next_state
+        is State.FAULT
+    )
+    assert (
+        decide_transition(
+            State.RUNNING, Observation(off_ring=True, stop_request=StopReason.OPERATOR)
+        ).next_state
+        is State.STOPPING
+    )
+    assert (
+        decide_transition(
+            State.RUNNING, Observation(off_ring=True, transient_fault=True)
+        ).next_state
+        is State.RECOVERING
+    )
+
+
 def test_hard_fault_preempts_from_any_running_state() -> None:
     for st in (State.ONTO_RING, State.RUNNING, State.RECOVERING):
         t = decide_transition(st, Observation(hard_fault=True))
@@ -192,6 +224,15 @@ def test_session_record_serializes_to_json() -> None:
     assert data["step_histogram"]["cruise"] == 30
     assert data["seed"] == 42
     assert data["fault_info"] is None
+    assert data["recenter_count"] == 0   # defaults to 0 when no re-centering happened
+
+
+def test_session_record_serializes_recenter_count() -> None:
+    rec = SessionRecord(
+        start_iso="t0", end_iso="t1", stop_reason=StopReason.DURATION,
+        lap_count=5.0, step_histogram={}, seed=1, recenter_count=7,
+    )
+    assert json.loads(rec.to_json())["recenter_count"] == 7
 
 
 def test_session_record_carries_fault_info() -> None:

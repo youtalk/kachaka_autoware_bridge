@@ -123,6 +123,7 @@ class Observation:
     bringup_ready: bool = False
     bringup_timed_out: bool = False
     on_ring: bool = False
+    off_ring: bool = False
     onto_ring_failed: bool = False
     onto_ring_exhausted: bool = False
     hard_fault: bool = False
@@ -188,6 +189,13 @@ def decide_transition(state: State, obs: Observation) -> Transition:
             return Transition(State.STOPPING, _STOP_ACTIONS, obs.stop_request)
         if obs.transient_fault:
             return Transition(State.RECOVERING)
+        # Re-centering: the robot has drifted off the loop centerline (the sub-1 m
+        # loop's outward control-tracking drift). Re-enter the tested ONTO_RING
+        # path to reposition onto the centerline, bounding the accumulating drift.
+        # Lowest-priority RUNNING corrective: a hard fault (handled above), an
+        # operator/duration stop, and a transient mode-drop all preempt it.
+        if obs.off_ring:
+            return Transition(State.ONTO_RING, (Action.DRIVE_ONTO_RING,))
         return Transition(State.RUNNING)
 
     if state is State.RECOVERING:
@@ -214,6 +222,7 @@ class SessionRecord:
     step_histogram: dict[str, int]
     seed: int
     fault_info: str | None = None
+    recenter_count: int = 0   # mid-RUNNING drift re-centerings; recenters/lap = loop-tightness health
 
     def to_json(self) -> str:
         def _default(obj: object) -> object:
