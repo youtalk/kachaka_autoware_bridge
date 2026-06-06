@@ -1,0 +1,589 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Endurance orchestrator: drive the generated loop continuously, varying motion
+to exercise Autoware Core, recover from transient faults, halt-and-capture on
+hard faults, and stop gracefully on a battery/duration/operator signal.
+
+Thin rclpy shell around the pure-logic core (kachaka_autoware_bridge.endurance)
+and the shared RingDriver. Each tick it builds an Observation, calls
+decide_transition, executes the returned Actions, and -- while RUNNING -- runs
+the scenario executor (carrot cruise / operation-mode dwell / real-goal arrive).
+
+Interfaces:
+  - SP4 (battery governor): services ~/stop_graceful and ~/abort (std_srvs/Trigger);
+    --max-duration arg gives a built-in DURATION stop.
+  - SP5 (telemetry): /diagnostics DiagnosticStatus(name="endurance_orchestrator")
+    status + ~/event (std_msgs/String JSON) + a minimal session-record JSON on exit.
+"""
+
+import json
+import math
+import os
+import sys
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+import rclpy
+from autoware_adapi_v1_msgs.msg import RouteState
+from autoware_adapi_v1_msgs.srv import ChangeOperationMode, ClearRoute, SetRoutePoints
+from autoware_adapi_v1_msgs.msg import OperationModeState
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+
+from kachaka_autoware_bridge.endurance import (
+    Action,
+    Observation,
+    ScenarioConfig,
+    ScenarioScheduler,
+    SessionRecord,
+    State,
+    StepMode,
+    StopReason,
+    decide_transition,
+)
+from kachaka_autoware_bridge.loop_route import (
+    angular_position,
+    carrot_goal,
+    compute_lap_goal,
+    should_refresh_carrot,
+    signed_progress,
+)
+from kachaka_autoware_bridge.ring_driver import RingDriver
+from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
+from kachaka_autoware_maps.loop_map_gen import parse_loop_params
+
+SET_ROUTE_SERVICE = "/api/routing/set_route_points"
+CLEAR_ROUTE_SERVICE = "/api/routing/clear_route"
+TO_AUTONOMOUS_SERVICE = "/system/operation_mode/change_to_autonomous"
+TO_STOP_SERVICE = "/system/operation_mode/change_to_stop"
+ODOM_TOPIC = "/localization/kinematic_state"
+ROUTE_STATE_TOPIC = "/planning/route_state"
+OPERATION_MODE_TOPIC = "/system/operation_mode/state"
+VELOCITY_LIMIT_TOPIC = "/planning/scenario_planning/max_velocity_default"
+SERVICE_TIMEOUT_SEC = 10.0
+ODOM_STALE_SEC = 5.0              # no /localization/kinematic_state this long -> hard fault
+RECOVER_BACKOFF_SEC = 2.0        # re-engage retry spacing in RECOVERING
+MAX_REENGAGE_ATTEMPTS = 3        # exceeded -> hard fault
+STEP_SETTLE_SEC = 3.0            # ignore mode!=AUTONOMOUS this long after a step begins
+SET_CLI_STALE_SEC = 5.0  # set_route service not-ready this long -> hard fault (debounce DDS flaps)
+ARRIVE_TIMEOUT_SEC = 120.0       # ARRIVE backstop: advance even if RouteState.ARRIVED never fires
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _resolve_velocity_limit_type():
+    """Resolve the external-velocity-limit message type at runtime. Its package
+    differs across Autoware versions; speed actuation is a spec-flagged on-robot
+    verification item, so probe candidates and return (type, None) or (None, why)."""
+    for module, name in (
+        ("autoware_internal_planning_msgs.msg", "VelocityLimit"),
+        ("tier4_planning_msgs.msg", "VelocityLimit"),
+    ):
+        try:
+            mod = __import__(module, fromlist=[name])
+            return getattr(mod, name), None
+        except (ImportError, AttributeError):
+            continue
+    return None, "no VelocityLimit message type found"
+
+
+class EnduranceNode(Node):
+    def __init__(self) -> None:
+        super().__init__("run_endurance")
+        self.declare_parameter(
+            "loop_params_path",
+            str(Path.home() / "maps" / "kachaka_loop" / "loop_params.yaml"),
+        )
+        self.declare_parameter("seed", 12345)
+        self.declare_parameter("max_duration_sec", 0.0)
+        self.declare_parameter("carrot_lead_fraction", 0.75)
+        self.declare_parameter("carrot_refresh_fraction", 0.30)
+        self.declare_parameter("bringup_timeout_sec", 60.0)
+        self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
+
+        loop_params_value = str(self.get_parameter("loop_params_path").value)
+        if not loop_params_value:
+            loop_params_value = str(Path.home() / "maps" / "kachaka_loop" / "loop_params.yaml")
+        loop_params_path = Path(loop_params_value).expanduser()
+        self.loop = parse_loop_params(loop_params_path.read_text())
+        self.seed = int(self.get_parameter("seed").value)
+        self.max_duration_sec = float(self.get_parameter("max_duration_sec").value)
+        self.carrot_lead = 2.0 * math.pi * float(self.get_parameter("carrot_lead_fraction").value)
+        self.carrot_refresh = (
+            2.0 * math.pi * float(self.get_parameter("carrot_refresh_fraction").value)
+        )
+        self.bringup_timeout_sec = float(self.get_parameter("bringup_timeout_sec").value)
+        session_dir_value = str(self.get_parameter("session_dir").value)
+        if not session_dir_value:
+            session_dir_value = str(Path.home() / "endurance_runs")
+        self.session_dir = Path(session_dir_value).expanduser()
+
+        self.cfg = ScenarioConfig()
+        self.scheduler = ScenarioScheduler(self.cfg, self.seed)
+        self.ring = RingDriver(self, self.loop)
+        self.velocity_limit_type, self._vel_warn = _resolve_velocity_limit_type()
+
+        # Subscriptions
+        self.latest_odom: Odometry | None = None
+        self.latest_route_state: RouteState | None = None
+        self.latest_mode: OperationModeState | None = None
+        self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, 1)
+        self.create_subscription(RouteState, ROUTE_STATE_TOPIC, self._on_route_state, 1)
+        self.create_subscription(OperationModeState, OPERATION_MODE_TOPIC, self._on_mode, 1)
+
+        # Clients
+        self.set_cli = self.create_client(SetRoutePoints, SET_ROUTE_SERVICE)
+        self.clear_cli = self.create_client(ClearRoute, CLEAR_ROUTE_SERVICE)
+        self.autonomous_cli = self.create_client(ChangeOperationMode, TO_AUTONOMOUS_SERVICE)
+        self.stop_cli = self.create_client(ChangeOperationMode, TO_STOP_SERVICE)
+
+        # Publishers (SP5)
+        self.diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
+        self.event_pub = self.create_publisher(String, "~/event", 10)
+        if self.velocity_limit_type is not None:
+            self.vel_pub = self.create_publisher(self.velocity_limit_type, VELOCITY_LIMIT_TOPIC, 1)
+        else:
+            self.vel_pub = None
+            self.get_logger().warning(f"speed actuation disabled: {self._vel_warn}")
+
+        # Stop services (SP4 / operator)
+        self._stop_request = StopReason.NONE
+        self.create_service(Trigger, "~/stop_graceful", self._on_stop_graceful)
+        self.create_service(Trigger, "~/abort", self._on_abort)
+
+        # Session / scenario state
+        self.state = State.INIT
+        self.start_wall = time.monotonic()
+        self.start_iso = _now_iso()
+        self.lap_accum_rad = 0.0
+        self._prev_theta: float | None = None
+        self._step_hist: Counter = Counter()
+        self._fault_info: str | None = None
+        self._travel_direction = self.loop.travel_direction
+        # onto-ring is executed synchronously by the DRIVE_ONTO_RING action, which
+        # sets these flags for the next observation.
+        self._on_ring_flag = False
+        self._onto_ring_failed = False
+        self._current_step = None
+        self._step_started_lap = 0.0
+        self._carrot_goal_theta: float | None = None
+        self._dwell_deadline = 0.0
+        self._bringup_deadline = self.start_wall + self.bringup_timeout_sec
+        self._last_odom_wall = self.start_wall
+        self._set_cli_down_since: float | None = None
+        self._step_started_wall = self.start_wall
+        self._reengage_attempts = 0
+        self._next_recover_wall = 0.0
+        self._done = False
+
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        # No ROS timer: main() drives _tick() in a manual spin_once loop. A timer
+        # whose callback calls spin_until_future_complete on this same node would
+        # re-enter the executor and deadlock (the set_loop_route idiom is manual
+        # spinning for exactly this reason).
+        self.get_logger().info(
+            f"run_endurance up: seed={self.seed} loop=({self.loop.center_x:.2f},"
+            f"{self.loop.center_y:.2f}) r={self.loop.radius:.2f} dir={self._travel_direction}"
+        )
+
+    # ---- subscription callbacks ----
+    def _on_odom(self, msg: Odometry) -> None:
+        self.latest_odom = msg
+        self._last_odom_wall = time.monotonic()
+
+    def _on_route_state(self, msg: RouteState) -> None:
+        self.latest_route_state = msg
+
+    def _on_mode(self, msg: OperationModeState) -> None:
+        self.latest_mode = msg
+
+    # ---- stop services ----
+    def _on_stop_graceful(self, _req, resp):
+        self._stop_request = StopReason.OPERATOR
+        resp.success = True
+        resp.message = "graceful stop requested"
+        return resp
+
+    def _on_abort(self, _req, resp):
+        self._fault_info = "operator abort"
+        self._stop_request = StopReason.OPERATOR
+        resp.success = True
+        resp.message = "abort requested"
+        return resp
+
+    # ---- helpers ----
+    def _emit_event(self, kind: str, **fields) -> None:
+        payload = {"t": _now_iso(), "state": self.state.value, "kind": kind, **fields}
+        self.event_pub.publish(String(data=json.dumps(payload)))
+        self.get_logger().info(f"event: {kind} {fields}")
+
+    def _publish_status(self) -> None:
+        status = DiagnosticStatus(
+            level=(
+                DiagnosticStatus.OK if self.state not in (State.FAULT,) else DiagnosticStatus.ERROR
+            ),
+            name="endurance_orchestrator",
+            message=self.state.value,
+            values=[
+                KeyValue(key="laps", value=f"{self.lap_accum_rad / (2.0 * math.pi):.2f}"),
+                KeyValue(key="uptime_s", value=f"{time.monotonic() - self.start_wall:.0f}"),
+                KeyValue(
+                    key="step",
+                    value=self._current_step.mode.value if self._current_step else "none",
+                ),
+                KeyValue(key="seed", value=str(self.seed)),
+            ],
+        )
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.status.append(status)
+        self.diag_pub.publish(arr)
+
+    def _pose(self):
+        p = self.latest_odom.pose.pose
+        yaw = math.atan2(
+            2.0 * (p.orientation.w * p.orientation.z + p.orientation.x * p.orientation.y),
+            1.0 - 2.0 * (p.orientation.y * p.orientation.y + p.orientation.z * p.orientation.z),
+        )
+        return p.position.x, p.position.y, yaw
+
+    def _call(self, client, request) -> bool:
+        if not client.wait_for_service(timeout_sec=SERVICE_TIMEOUT_SEC):
+            self.get_logger().warning(f"{client.srv_name} unavailable")
+            return False
+        fut = client.call_async(request)
+        rclpy.spin_until_future_complete(self, fut, timeout_sec=SERVICE_TIMEOUT_SEC)
+        return fut.result() is not None
+
+    def _set_route_to(self, goal) -> bool:
+        """Set an AD-API route to a GoalPose (map frame). Returns False (logged)
+        if the service is unavailable or rejects the route."""
+        req = SetRoutePoints.Request()
+        req.header.frame_id = "map"
+        req.header.stamp = self.get_clock().now().to_msg()
+        req.option.allow_goal_modification = True
+        req.goal.position.x = goal.x
+        req.goal.position.y = goal.y
+        qz, qw = yaw_to_quaternion(goal.yaw)
+        req.goal.orientation.z = qz
+        req.goal.orientation.w = qw
+        if not self.set_cli.wait_for_service(timeout_sec=SERVICE_TIMEOUT_SEC):
+            return False
+        fut = self.set_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, fut, timeout_sec=SERVICE_TIMEOUT_SEC)
+        resp = fut.result()
+        if resp is None or not resp.status.success:
+            code = getattr(getattr(resp, "status", None), "code", "n/a")
+            self.get_logger().warning(f"set_route_points rejected (code={code})")
+            return False
+        return True
+
+    def _apply_velocity_limit(self, speed_mps: float) -> None:
+        if self.vel_pub is None or self.velocity_limit_type is None:
+            return
+        msg = self.velocity_limit_type()
+        if hasattr(msg, "stamp"):
+            msg.stamp = self.get_clock().now().to_msg()
+        if hasattr(msg, "max_velocity"):
+            msg.max_velocity = float(speed_mps)
+        self.vel_pub.publish(msg)
+
+    def _change_mode(self, autonomous: bool) -> bool:
+        client = self.autonomous_cli if autonomous else self.stop_cli
+        return self._call(client, ChangeOperationMode.Request())
+
+    def _update_laps(self) -> None:
+        if self.latest_odom is None:
+            return
+        x, y, _ = self._pose()
+        theta = angular_position(self.loop.center_x, self.loop.center_y, x, y)
+        # signed_progress uses the shortest signed arc, so this is correct only
+        # while the per-tick angular step stays < pi. At the generated loop radius
+        # and <=0.3 m/s with ~0.1 s ticks the step is far below pi; it would only
+        # break on a very small radius combined with a multi-second blocking tick.
+        if self._prev_theta is not None:
+            self.lap_accum_rad += signed_progress(self._prev_theta, theta, self._travel_direction)
+        self._prev_theta = theta
+
+    def _mode_is_autonomous(self) -> bool:
+        return (
+            self.latest_mode is not None
+            and self.latest_mode.mode == OperationModeState.AUTONOMOUS
+        )
+
+    def _in_moving_step(self) -> bool:
+        return self._current_step is not None and self._current_step.mode in (
+            StepMode.CRUISE,
+            StepMode.ARRIVE,
+        )
+
+    # ---- top-level tick ----
+    def _tick(self) -> None:
+        self._update_laps()
+        self._publish_status()
+        obs = self._observe()
+        transition = decide_transition(self.state, obs)
+        if transition.next_state is not self.state:
+            self._emit_event("transition", to=transition.next_state.value,
+                             reason=transition.stop_reason.value)
+            if transition.next_state is State.RECOVERING and self.state is State.RUNNING:
+                self._reengage_attempts = 0
+                self._next_recover_wall = 0.0
+            self._execute(transition)
+            self.state = transition.next_state
+        elif self.state is State.RUNNING:
+            self._run_scenario_tick()
+        elif self.state is State.RECOVERING:
+            self._recovering_tick()
+        if self.state is State.DONE:
+            self._done = True
+
+    def _recovering_tick(self) -> None:
+        now = time.monotonic()
+        if now < self._next_recover_wall:
+            return
+        self._next_recover_wall = now + RECOVER_BACKOFF_SEC
+        self._reengage_attempts += 1
+        self._emit_event("recover_attempt", n=self._reengage_attempts)
+        self._change_mode(True)
+
+    def _observe(self) -> Observation:
+        now = time.monotonic()
+        if self.state is State.INIT:
+            ready = (
+                self.latest_odom is not None
+                and self.latest_route_state is not None
+                and self.latest_mode is not None
+                and self.set_cli.service_is_ready()
+            )
+            return Observation(bringup_ready=ready, bringup_timed_out=now > self._bringup_deadline)
+        # DURATION cap and operator/SP4 stop request.
+        stop = self._stop_request
+        if stop is StopReason.NONE and self.max_duration_sec > 0.0 and \
+                (now - self.start_wall) >= self.max_duration_sec:
+            stop = StopReason.DURATION
+        # Hard fault: localization went stale (a dead localization/bridge) or the
+        # AD-API routing service dropped (a dead planning/api node) -- this is what
+        # the done-when "kill a planning node -> FAULT" exercise triggers.
+        # Debounce the routing-service readiness: a momentary discovery flap must
+        # not permanently FAULT a healthy unattended run, so require it to be
+        # continuously not-ready for SET_CLI_STALE_SEC (mirrors the odom-stale window).
+        if self.set_cli.service_is_ready():
+            self._set_cli_down_since = None
+        elif self._set_cli_down_since is None:
+            self._set_cli_down_since = now
+        set_cli_stale = (
+            self._set_cli_down_since is not None
+            and (now - self._set_cli_down_since) > SET_CLI_STALE_SEC
+        )
+        hard = (now - self._last_odom_wall) > ODOM_STALE_SEC or set_cli_stale
+        if self.state is State.ONTO_RING:
+            return Observation(
+                on_ring=self._on_ring_flag,
+                onto_ring_failed=self._onto_ring_failed,
+                hard_fault=hard,
+            )
+        if self.state is State.RUNNING:
+            # Transient: operation mode fell out of AUTONOMOUS during a moving step
+            # (not a deliberate DWELL), after a settle window to ignore the
+            # change_to_autonomous round-trip at step start.
+            transient = (
+                self._in_moving_step()
+                and (now - self._step_started_wall) > STEP_SETTLE_SEC
+                and not self._mode_is_autonomous()
+            )
+            return Observation(stop_request=stop, hard_fault=hard, transient_fault=transient)
+        if self.state is State.RECOVERING:
+            return Observation(
+                hard_fault=hard,
+                recovered=self._mode_is_autonomous(),
+                retry_exhausted=self._reengage_attempts >= MAX_REENGAGE_ATTEMPTS,
+            )
+        return Observation(stop_request=stop)
+
+    def _execute(self, transition) -> None:
+        for action in transition.actions:
+            if action is Action.DRIVE_ONTO_RING:
+                self._do_onto_ring()
+            elif action is Action.START_RUNNING:
+                self._begin_next_step()
+            elif action is Action.REENGAGE:
+                self._reengage_attempts = 0
+                self._next_recover_wall = 0.0
+                self._step_started_wall = time.monotonic()
+                self._change_mode(True)
+            elif action is Action.SAFE_STOP:
+                self._change_mode(False)
+            elif action is Action.CLEAR_ROUTE:
+                self._call(self.clear_cli, ClearRoute.Request())
+            elif action is Action.RETURN_HOME:
+                pass  # optional dock return; left to SP4/charge-cycle work
+            elif action is Action.CAPTURE_DIAGNOSTICS:
+                self._capture_diagnostics()
+            elif action is Action.WRITE_FAULT_REPORT:
+                self._write_session_record(StopReason.FAULT)
+            elif action is Action.WRITE_SESSION_RECORD:
+                self._write_session_record(transition.stop_reason)
+
+    def _do_onto_ring(self) -> None:
+        if self.latest_odom is None:
+            self._onto_ring_failed = True
+            return
+        rx, ry, ryaw = self._pose()
+        self._travel_direction = self.ring.resolve_travel_direction(rx, ry)
+        ok = self.ring.ensure_on_ring(rx, ry, ryaw, self._travel_direction)
+        if ok:
+            self.ring.set_manual_control(True)
+            self._on_ring_flag = True
+        else:
+            self._onto_ring_failed = True
+
+    # ---- RUNNING scenario executor ----
+    def _begin_next_step(self) -> None:
+        step = self.scheduler.next_step()
+        self._current_step = step
+        self._step_hist[step.mode.value] += 1
+        self._step_started_lap = self.lap_accum_rad
+        self._step_started_wall = time.monotonic()
+        self._emit_event("step_begin", mode=step.mode.value, speed=step.target_speed_mps,
+                         extent=step.extent)
+        x, y, _ = self._pose()
+        if step.mode is StepMode.DWELL:
+            self._change_mode(False)
+            self._dwell_deadline = time.monotonic() + min(step.extent, self.cfg.dwell_long_sec)
+            return
+        self._apply_velocity_limit(step.target_speed_mps)
+        if step.mode is StepMode.CRUISE:
+            self._carrot_goal_theta = self._place_carrot(x, y)
+            self._change_mode(True)
+        elif step.mode is StepMode.ARRIVE:
+            # A half-lap-ish distinct goal (antipodal at fraction 0.5) so the
+            # Euclidean arrival check fires correctly (not the near-full-lap
+            # early-ARRIVED trap), exercising the ARRIVED -> re-route path.
+            goal = compute_lap_goal(
+                self.loop.center_x, self.loop.center_y, self.loop.radius, x, y,
+                behind_angle_rad=2.0 * math.pi * step.extent,
+                travel_direction=self._travel_direction,
+            )
+            if not self._set_route_to(goal):
+                # Route rejected: do not park on a goal-less ARRIVE step; advance.
+                self._emit_event("arrive_route_rejected")
+                self._begin_next_step()
+                return
+            self._change_mode(True)
+
+    def _place_carrot(self, robot_x: float, robot_y: float) -> float:
+        """Place a carrot goal carrot_lead ahead of the robot; return its angular
+        position so the next ticks can decide when to refresh it."""
+        goal = carrot_goal(
+            self.loop.center_x, self.loop.center_y, self.loop.radius,
+            robot_x, robot_y, self.carrot_lead, self._travel_direction,
+        )
+        self._set_route_to(goal)
+        return angular_position(self.loop.center_x, self.loop.center_y, goal.x, goal.y)
+
+    def _run_scenario_tick(self) -> None:
+        step = self._current_step
+        if step is None:
+            self._begin_next_step()
+            return
+        if step.mode is StepMode.DWELL:
+            if time.monotonic() >= self._dwell_deadline:
+                self._change_mode(True)
+                self._begin_next_step()
+            return
+        x, y, _ = self._pose()
+        theta = angular_position(self.loop.center_x, self.loop.center_y, x, y)
+        if step.mode is StepMode.CRUISE:
+            if self._carrot_goal_theta is not None and should_refresh_carrot(
+                theta, self._carrot_goal_theta, self._travel_direction, self.carrot_refresh
+            ):
+                self._carrot_goal_theta = self._place_carrot(x, y)
+            if (self.lap_accum_rad - self._step_started_lap) >= 2.0 * math.pi * step.extent:
+                self._begin_next_step()
+        elif step.mode is StepMode.ARRIVE:
+            rs = self.latest_route_state
+            if rs is not None and rs.state == RouteState.ARRIVED:
+                self._emit_event("arrived", lap=self.lap_accum_rad / (2.0 * math.pi))
+                self._begin_next_step()
+            elif (time.monotonic() - self._step_started_wall) > ARRIVE_TIMEOUT_SEC:
+                # Liveness backstop: never let a missing ARRIVED permanently stall
+                # the harness (the next step re-engages motion via a fresh carrot).
+                self._emit_event("arrive_timeout", lap=self.lap_accum_rad / (2.0 * math.pi))
+                self._begin_next_step()
+
+    def _capture_diagnostics(self) -> None:
+        try:
+            import psutil  # noqa: F401
+            procs = "psutil available"
+        except ImportError:
+            procs = "psutil missing"
+        self._fault_info = self._fault_info or f"hard fault in {self.state.value}; {procs}"
+        self._emit_event("fault_capture", info=self._fault_info)
+
+    def _write_session_record(self, reason: StopReason) -> None:
+        record = SessionRecord(
+            start_iso=self.start_iso,
+            end_iso=_now_iso(),
+            stop_reason=reason,
+            lap_count=self.lap_accum_rad / (2.0 * math.pi),
+            step_histogram=dict(self._step_hist),
+            seed=self.seed,
+            fault_info=self._fault_info,
+        )
+        out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
+        out.write_text(record.to_json())
+        self.get_logger().info(f"session record written: {out}")
+        self._emit_event("session_record", path=str(out), reason=reason.value)
+
+
+def main() -> int:
+    rclpy.init()
+    node = None
+    try:
+        node = EnduranceNode()
+        while rclpy.ok() and not node._done:
+            rclpy.spin_once(node, timeout_sec=0.1)  # service subscriptions
+            node._tick()                            # advance the state machine
+        return 0
+    except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        msg = f"run_endurance: {exc}"
+        if node is not None:
+            node.get_logger().error(msg)
+        else:
+            print(msg, file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:  # noqa: BLE001 - unexpected error must not leave the robot moving
+        if node is not None:
+            node.get_logger().error(f"run_endurance: unexpected error: {exc}")
+        else:
+            print(f"run_endurance: unexpected error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if node is not None:
+            # Best-effort safe stop on ANY exit path (normal, Ctrl-C, or an
+            # unexpected exception in the tick loop) so the robot is never left
+            # AUTONOMOUS. Guarded so a stop failure can't mask the real error.
+            if rclpy.ok():
+                try:
+                    node._change_mode(False)
+                except Exception:  # noqa: BLE001
+                    pass
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
