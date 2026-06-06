@@ -18,6 +18,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_trajectory_gen test/test_trajectory_gen.py)
   ament_add_pytest_test(test_loop_route test/test_loop_route.py)
+  ament_add_pytest_test(test_endurance test/test_endurance.py)
 endif()
 
 ament_package()
