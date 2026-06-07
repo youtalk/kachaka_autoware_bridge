@@ -209,6 +209,17 @@ def decide_transition(state: State, obs: Observation) -> Transition:
     return Transition(State.DONE)
 
 
+def exit_stop_reason(shutdown_via_signal: bool) -> StopReason:
+    """StopReason to stamp on the SessionRecord the shell writes from its finally
+    block when a run ends OUTSIDE the FSM's STOPPING/FAULT path -- i.e. a SIGINT/
+    SIGTERM (or an unexpected exception) broke the tick loop before a terminal
+    transition could run WRITE_SESSION_RECORD. A signal is an operator-driven
+    stop; anything else is treated as a fault so the unexpected exit is still
+    analysable. Keeping the rule here (pure, unit-testable) leaves the shell to
+    only do the I/O (best-effort safe stop, write the record)."""
+    return StopReason.OPERATOR if shutdown_via_signal else StopReason.FAULT
+
+
 @dataclass
 class SessionRecord:
     """Minimal self-contained ledger written by the orchestrator on exit. SP5

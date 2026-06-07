@@ -14,6 +14,7 @@ from kachaka_autoware_bridge.endurance import (
     StepMode,
     StopReason,
     decide_transition,
+    exit_stop_reason,
 )
 
 
@@ -247,3 +248,13 @@ def test_scenario_config_rejects_zero_arrive_cadence() -> None:
     import pytest
     with pytest.raises(ValueError):
         ScenarioConfig(arrive_every_n_steps=0)
+
+
+def test_exit_stop_reason_signal_is_operator() -> None:
+    # A SIGINT/SIGTERM that breaks the loop is an operator-driven stop.
+    assert exit_stop_reason(shutdown_via_signal=True) is StopReason.OPERATOR
+
+
+def test_exit_stop_reason_otherwise_is_fault() -> None:
+    # Any other non-FSM exit (an unexpected exception) is recorded as a fault.
+    assert exit_stop_reason(shutdown_via_signal=False) is StopReason.FAULT

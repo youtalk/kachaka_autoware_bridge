@@ -54,6 +54,7 @@ from kachaka_autoware_bridge.endurance import (
     StepMode,
     StopReason,
     decide_transition,
+    exit_stop_reason,
 )
 from kachaka_autoware_bridge.loop_route import (
     angular_position,
@@ -224,6 +225,7 @@ class EnduranceNode(Node):
         self._reengage_attempts = 0
         self._next_recover_wall = 0.0
         self._done = False
+        self._record_written = False
 
         self.session_dir.mkdir(parents=True, exist_ok=True)
         # No ROS timer: main() drives _tick() in a manual spin_once loop. A timer
@@ -703,6 +705,8 @@ class EnduranceNode(Node):
         self._emit_event("fault_capture", info=self._fault_info)
 
     def _write_session_record(self, reason: StopReason) -> None:
+        if self._record_written:
+            return  # The FSM (STOPPING/FAULT) already wrote one -- never double-write.
         record = SessionRecord(
             start_iso=self.start_iso,
             end_iso=_now_iso(),
@@ -715,6 +719,7 @@ class EnduranceNode(Node):
         )
         out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
         out.write_text(record.to_json())
+        self._record_written = True
         self.get_logger().info(f"session record written: {out}")
         self._emit_event("session_record", path=str(out), reason=reason.value)
 
@@ -769,6 +774,15 @@ def main() -> int:
                     node._change_mode(False)
                 except Exception:  # noqa: BLE001
                     pass
+                # A SIGINT/SIGTERM (or an unexpected exception) breaks the tick
+                # loop before the FSM can run WRITE_SESSION_RECORD, so the record
+                # would be lost. Write it here too; the idempotent guard makes a
+                # normal STOPPING/FAULT exit a no-op.
+                if not node._record_written:
+                    try:
+                        node._write_session_record(exit_stop_reason(shutdown["requested"]))
+                    except Exception:  # noqa: BLE001
+                        pass
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
