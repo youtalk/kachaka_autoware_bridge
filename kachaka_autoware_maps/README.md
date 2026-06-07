@@ -101,7 +101,8 @@ full schema if you later split the map into multiple tiles.
 For the stock Kachaka (no Ouster), the planning map is a **circular one-way
 loop** generated from Kachaka's own 2D occupancy map. The tool snapshots
 `/kachaka/mapping/map`, finds the largest free rectangle, and fits the largest
-circle that leaves lane + margin clearance inside it.
+circle that leaves `wall_clearance` + `margin` inside it (the drawn lanelet is
+wider than that physical corridor — see the parameters below).
 
 ```bash
 source /opt/ros/jazzy/setup.zsh
@@ -113,9 +114,12 @@ ros2 launch kachaka_autoware_maps generate_loop_map.launch.xml \
 ```
 
 Writes `lanelet2_map.osm`, `map_projector_info.yaml`, and `loop_params.yaml`
-(centre/radius for downstream tools). Tunable parameters: `lane_width` (0.6 m),
-`max_radius` (0.9 m cap), `margin` (0.05 m), `num_segments` (16), `speed_limit`
-(0.3 m/s). The projector is `Local`, so lanelet `local_x`/`local_y` are
+(centre/radius for downstream tools). Tunable parameters: `lane_width` (1.3 m —
+the DRAWN lanelet width, kept wide so `path_generator`'s goal-connection stays
+inside the lane on the tight loop), `wall_clearance` (0.3 m — the PHYSICAL room
+the robot needs from the centerline to a wall; this alone sizes the radius, so a
+wide drawn lane no longer shrinks the loop), `max_radius` (0.9 m cap), `margin`
+(0.05 m), `num_segments` (16), `speed_limit` (0.3 m/s). The projector is `Local`, so lanelet `local_x`/`local_y` are
 map-frame metres aligned with Kachaka's map origin. Loop smoothness is
 controlled by `num_segments` (more segments = smoother circle), **not** by the
 map loader's centerline resolution — increase `num_segments` if pure-pursuit

@@ -76,7 +76,7 @@ def test_rect_center_maps_to_map_frame() -> None:
     rect = FreeRectangle(row0=0, col0=0, row1=19, col1=19)
     params = rect_to_loop_params(
         rect, resolution=0.05, origin_x=-2.0, origin_y=-3.0,
-        lane_width=0.6, margin=0.05, max_radius=0.9,
+        wall_clearance=0.3, margin=0.05, max_radius=0.9,
     )
     assert params.center_x == pytest.approx(-2.0 + 0.5)
     assert params.center_y == pytest.approx(-3.0 + 0.5)
@@ -87,7 +87,7 @@ def test_radius_fits_inside_small_rect() -> None:
     rect = FreeRectangle(row0=0, col0=0, row1=19, col1=19)
     params = rect_to_loop_params(
         rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
-        lane_width=0.6, margin=0.05, max_radius=0.9,
+        wall_clearance=0.3, margin=0.05, max_radius=0.9,
     )
     assert params.radius == pytest.approx(0.15)
 
@@ -97,7 +97,7 @@ def test_radius_capped_in_large_rect() -> None:
     rect = FreeRectangle(row0=0, col0=0, row1=59, col1=59)
     params = rect_to_loop_params(
         rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
-        lane_width=0.6, margin=0.05, max_radius=0.9,
+        wall_clearance=0.3, margin=0.05, max_radius=0.9,
     )
     assert params.radius == pytest.approx(0.9)
 
@@ -107,7 +107,7 @@ def test_radius_uses_shorter_side() -> None:
     rect = FreeRectangle(row0=0, col0=0, row1=19, col1=59)
     params = rect_to_loop_params(
         rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
-        lane_width=0.6, margin=0.05, max_radius=0.9,
+        wall_clearance=0.3, margin=0.05, max_radius=0.9,
     )
     assert params.radius == pytest.approx(0.15)
 
@@ -117,7 +117,7 @@ def test_rect_too_small_raises() -> None:
     with pytest.raises(ValueError):
         rect_to_loop_params(
             rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
-            lane_width=0.6, margin=0.05, max_radius=0.9,
+            wall_clearance=0.3, margin=0.05, max_radius=0.9,
         )
 
 
@@ -220,7 +220,7 @@ def test_occupancy_to_loop_osm_end_to_end() -> None:
     osm, params = occupancy_to_loop_osm(
         data, width=80, height=80, resolution=0.05,
         origin_x=-2.0, origin_y=-2.0,
-        lane_width=0.6, margin=0.05, max_radius=0.9,
+        lane_width=0.6, wall_clearance=0.3, margin=0.05, max_radius=0.9,
         speed_limit=0.3, num_segments=16,
     )
     # Free area centre is (0, 0) in the map frame (origin -2 + 2 m).
@@ -307,3 +307,43 @@ def test_loaded_loop_is_a_routable_cycle() -> None:
         cur = graph.following(cur)[0]
     assert cur.id == lanelets[0].id  # closed the cycle
     assert sorted(visited) == [ll.id for ll in lanelets]  # all, once each
+
+
+def test_radius_uses_wall_clearance_not_drawn_lane_width() -> None:
+    # 3.0 m x 3.0 m free area, generous cap so the clearance term governs.
+    rect = FreeRectangle(row0=0, col0=0, row1=59, col1=59)
+    params = rect_to_loop_params(
+        rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        wall_clearance=0.3, margin=0.05, max_radius=2.0,
+    )
+    # usable = 1.5 - 0.3 - 0.05 = 1.15; sized by the PHYSICAL clearance only.
+    assert params.radius == pytest.approx(1.15)
+
+
+def test_wide_drawn_lane_does_not_shrink_the_radius() -> None:
+    # The working map: a wide planner-facing lane (1.3 m) must NOT eat into the
+    # radius, which is sized only by wall_clearance. Same rect + same clearance
+    # -> same radius whether the drawn lane is 0.6 or 1.3, and the 1.3 m lane is
+    # actually drawn (inner = radius - 1.3/2).
+    data = [0] * (60 * 60)  # 3.0 m x 3.0 m
+    _, narrow = occupancy_to_loop_osm(
+        data, width=60, height=60, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        lane_width=0.6, wall_clearance=0.3, margin=0.05, max_radius=2.0,
+        speed_limit=0.3, num_segments=16,
+    )
+    osm_wide, wide = occupancy_to_loop_osm(
+        data, width=60, height=60, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        lane_width=1.3, wall_clearance=0.3, margin=0.05, max_radius=2.0,
+        speed_limit=0.3, num_segments=16,
+    )
+    assert wide.radius == pytest.approx(narrow.radius)
+    root = ET.fromstring(osm_wide)
+    radii = set()
+    for node in root.findall("node"):
+        tags = {
+            t.get("k"): float(t.get("v"))
+            for t in node.findall("tag")
+            if t.get("k") in ("local_x", "local_y")
+        }
+        radii.add(round(math.hypot(tags["local_x"] - wide.center_x, tags["local_y"] - wide.center_y), 3))
+    assert radii == {round(wide.radius - 0.65, 3), round(wide.radius + 0.65, 3)}
