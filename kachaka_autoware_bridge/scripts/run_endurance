@@ -54,6 +54,7 @@ from kachaka_autoware_bridge.endurance import (
     StepMode,
     StopReason,
     decide_transition,
+    exit_stop_reason,
 )
 from kachaka_autoware_bridge.loop_route import (
     angular_position,
@@ -141,7 +142,6 @@ class EnduranceNode(Node):
         self.declare_parameter("seed", 12345)
         self.declare_parameter("max_duration_sec", 0.0)
         self.declare_parameter("carrot_lead_fraction", 0.25)
-        self.declare_parameter("carrot_refresh_fraction", 0.30)
         self.declare_parameter("bringup_timeout_sec", 60.0)
         self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
 
@@ -153,9 +153,6 @@ class EnduranceNode(Node):
         self.seed = int(self.get_parameter("seed").value)
         self.max_duration_sec = float(self.get_parameter("max_duration_sec").value)
         self.carrot_lead = 2.0 * math.pi * float(self.get_parameter("carrot_lead_fraction").value)
-        self.carrot_refresh = (
-            2.0 * math.pi * float(self.get_parameter("carrot_refresh_fraction").value)
-        )
         self.bringup_timeout_sec = float(self.get_parameter("bringup_timeout_sec").value)
         session_dir_value = str(self.get_parameter("session_dir").value)
         if not session_dir_value:
@@ -214,7 +211,6 @@ class EnduranceNode(Node):
         self._recenter_count = 0
         self._current_step = None
         self._step_started_lap = 0.0
-        self._carrot_goal_theta: float | None = None
         self._next_hop_wall = 0.0
         self._dwell_deadline = 0.0
         self._bringup_deadline = self.start_wall + self.bringup_timeout_sec
@@ -224,6 +220,7 @@ class EnduranceNode(Node):
         self._reengage_attempts = 0
         self._next_recover_wall = 0.0
         self._done = False
+        self._record_written = False
 
         self.session_dir.mkdir(parents=True, exist_ok=True)
         # No ROS timer: main() drives _tick() in a manual spin_once loop. A timer
@@ -478,7 +475,11 @@ class EnduranceNode(Node):
                 and self.latest_mode is not None
                 and self.set_cli.service_is_ready()
             )
-            return Observation(bringup_ready=ready, bringup_timed_out=now > self._bringup_deadline)
+            return Observation(
+                bringup_ready=ready,
+                bringup_timed_out=now > self._bringup_deadline,
+                stop_request=self._stop_request,
+            )
         # DURATION cap and operator/SP4 stop request.
         stop = self._stop_request
         if stop is StopReason.NONE and self.max_duration_sec > 0.0 and \
@@ -505,6 +506,7 @@ class EnduranceNode(Node):
                 onto_ring_failed=self._onto_ring_failed,
                 onto_ring_exhausted=self._onto_ring_attempts >= ONTO_RING_MAX_ATTEMPTS,
                 hard_fault=hard,
+                stop_request=stop,
             )
         if self.state is State.RUNNING:
             # Transient: operation mode fell out of AUTONOMOUS during a moving step
@@ -534,6 +536,7 @@ class EnduranceNode(Node):
                 hard_fault=hard,
                 recovered=self._mode_is_autonomous(),
                 retry_exhausted=self._reengage_attempts >= MAX_REENGAGE_ATTEMPTS,
+                stop_request=stop,
             )
         return Observation(stop_request=stop)
 
@@ -615,7 +618,7 @@ class EnduranceNode(Node):
             return
         self._apply_velocity_limit(step.target_speed_mps)
         if step.mode is StepMode.CRUISE:
-            self._carrot_goal_theta = self._place_carrot(x, y)
+            self._place_carrot(x, y)
             self._change_mode(True)
         elif step.mode is StepMode.ARRIVE:
             # A half-lap-ish distinct goal (antipodal at fraction 0.5) so the
@@ -636,9 +639,8 @@ class EnduranceNode(Node):
                 return
             self._change_mode(True)
 
-    def _place_carrot(self, robot_x: float, robot_y: float) -> float:
-        """Place a carrot goal carrot_lead ahead of the robot; return its angular
-        position so the next ticks can decide when to refresh it. Re-routes via
+    def _place_carrot(self, robot_x: float, robot_y: float) -> None:
+        """Place a carrot goal carrot_lead ahead of the robot. Re-routes via
         _reroute (stop -> clear -> set): the carrot route the robot is following is
         'in use' and cannot be cleared/overwritten until a STOP transition releases
         it, so a naive clear+set leaves the carrot frozen (see _reroute)."""
@@ -650,7 +652,6 @@ class EnduranceNode(Node):
         # Give the robot time to start moving toward the fresh carrot before the
         # stop-detector can fire again.
         self._last_moving_wall = time.monotonic()
-        return angular_position(self.loop.center_x, self.loop.center_y, goal.x, goal.y)
 
     def _run_scenario_tick(self) -> None:
         step = self._current_step
@@ -679,7 +680,7 @@ class EnduranceNode(Node):
                     lap=self.lap_accum_rad / (2.0 * math.pi),
                     arrived=self._route_arrived(),
                 )
-                self._carrot_goal_theta = self._place_carrot(x, y)
+                self._place_carrot(x, y)
                 self._change_mode(True)
                 self._next_hop_wall = time.monotonic() + HOP_COOLDOWN_SEC
         elif step.mode is StepMode.ARRIVE:
@@ -703,6 +704,8 @@ class EnduranceNode(Node):
         self._emit_event("fault_capture", info=self._fault_info)
 
     def _write_session_record(self, reason: StopReason) -> None:
+        if self._record_written:
+            return  # The FSM (STOPPING/FAULT) already wrote one -- never double-write.
         record = SessionRecord(
             start_iso=self.start_iso,
             end_iso=_now_iso(),
@@ -715,6 +718,7 @@ class EnduranceNode(Node):
         )
         out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
         out.write_text(record.to_json())
+        self._record_written = True
         self.get_logger().info(f"session record written: {out}")
         self._emit_event("session_record", path=str(out), reason=reason.value)
 
@@ -769,6 +773,15 @@ def main() -> int:
                     node._change_mode(False)
                 except Exception:  # noqa: BLE001
                     pass
+                # A SIGINT/SIGTERM (or an unexpected exception) breaks the tick
+                # loop before the FSM can run WRITE_SESSION_RECORD, so the record
+                # would be lost. Write it here too; the idempotent guard makes a
+                # normal STOPPING/FAULT exit a no-op.
+                if not node._record_written:
+                    try:
+                        node._write_session_record(exit_stop_reason(shutdown["requested"]))
+                    except Exception:  # noqa: BLE001
+                        pass
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -160,6 +160,14 @@ def decide_transition(state: State, obs: Observation) -> Transition:
     if state in running_states and obs.hard_fault:
         return Transition(State.FAULT, _FAULT_ACTIONS, StopReason.FAULT)
 
+    # An operator/SP4/duration stop is honored from ANY non-terminal state, not
+    # just RUNNING, so a stop requested during bring-up, drive-on, or recovery
+    # still halts cleanly and writes a session record. A hard fault (above) still
+    # preempts it; transient/off-ring handling (below) is lower priority.
+    non_terminal = (State.INIT, State.ONTO_RING, State.RUNNING, State.RECOVERING)
+    if state in non_terminal and obs.stop_request is not StopReason.NONE:
+        return Transition(State.STOPPING, _STOP_ACTIONS, obs.stop_request)
+
     if state is State.INIT:
         if obs.bringup_timed_out:
             return Transition(
@@ -185,8 +193,6 @@ def decide_transition(state: State, obs: Observation) -> Transition:
         return Transition(State.ONTO_RING)
 
     if state is State.RUNNING:
-        if obs.stop_request is not StopReason.NONE:
-            return Transition(State.STOPPING, _STOP_ACTIONS, obs.stop_request)
         if obs.transient_fault:
             return Transition(State.RECOVERING)
         # Re-centering: the robot has drifted off the loop centerline (the sub-1 m
@@ -207,6 +213,17 @@ def decide_transition(state: State, obs: Observation) -> Transition:
 
     # STOPPING, FAULT, DONE are terminal w.r.t. the machine: settle to DONE.
     return Transition(State.DONE)
+
+
+def exit_stop_reason(shutdown_via_signal: bool) -> StopReason:
+    """StopReason to stamp on the SessionRecord the shell writes from its finally
+    block when a run ends OUTSIDE the FSM's STOPPING/FAULT path -- i.e. a SIGINT/
+    SIGTERM (or an unexpected exception) broke the tick loop before a terminal
+    transition could run WRITE_SESSION_RECORD. A signal is an operator-driven
+    stop; anything else is treated as a fault so the unexpected exit is still
+    analysable. Keeping the rule here (pure, unit-testable) leaves the shell to
+    only do the I/O (best-effort safe stop, write the record)."""
+    return StopReason.OPERATOR if shutdown_via_signal else StopReason.FAULT
 
 
 @dataclass

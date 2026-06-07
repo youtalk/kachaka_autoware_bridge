@@ -132,7 +132,7 @@ def rect_to_loop_params(
     resolution: float,
     origin_x: float,
     origin_y: float,
-    lane_width: float,
+    wall_clearance: float,
     margin: float,
     max_radius: float,
 ) -> LoopParams:
@@ -143,16 +143,21 @@ def rect_to_loop_params(
     where (origin_x, origin_y) is the grid's info.origin.position; this assumes
     zero grid rotation (true for Kachaka's axis-aligned map). The loop centre is
     the rectangle centre. The centerline radius is the largest circle that fits
-    inside the rectangle while leaving half the lane plus `margin` of clearance:
-        usable = min(width_m, height_m) / 2 - lane_width / 2 - margin
+    inside the rectangle while leaving ``wall_clearance`` (the PHYSICAL half-
+    corridor the robot needs from the centerline to a wall) plus ``margin``:
+        usable = min(width_m, height_m) / 2 - wall_clearance - margin
         radius = min(usable, max_radius)
-    Raises ValueError on non-positive resolution/lane_width or a rectangle too
-    small to fit a positive radius.
+    ``wall_clearance`` is deliberately INDEPENDENT of the drawn lanelet width
+    (generate_circle_loop_osm's ``lane_width``): the lanelet is drawn wide so
+    path_generator's goal-connection stays inside the lane on a tight loop, but
+    the physical room the robot needs is set only by its footprint -- so a wide
+    drawn lane must not shrink the radius. Raises ValueError on non-positive
+    resolution/wall_clearance or a rectangle too small to fit a positive radius.
     """
     if resolution <= 0.0:
         raise ValueError(f"resolution must be > 0, got {resolution}")
-    if lane_width <= 0.0:
-        raise ValueError(f"lane_width must be > 0, got {lane_width}")
+    if wall_clearance <= 0.0:
+        raise ValueError(f"wall_clearance must be > 0, got {wall_clearance}")
 
     center_col = rect.col0 + rect.cols / 2.0
     center_row = rect.row0 + rect.rows / 2.0
@@ -161,12 +166,12 @@ def rect_to_loop_params(
 
     width_m = rect.cols * resolution
     height_m = rect.rows * resolution
-    usable = min(width_m, height_m) / 2.0 - lane_width / 2.0 - margin
+    usable = min(width_m, height_m) / 2.0 - wall_clearance - margin
     radius = min(usable, max_radius)
     if radius <= 0.0:
         raise ValueError(
             f"free rectangle {width_m:.2f}x{height_m:.2f} m is too small for "
-            f"lane_width={lane_width} + margin={margin}"
+            f"wall_clearance={wall_clearance} + margin={margin}"
         )
     return LoopParams(center_x=center_x, center_y=center_y, radius=radius)
 
@@ -345,6 +350,7 @@ def occupancy_to_loop_osm(
     origin_y: float,
     *,
     lane_width: float,
+    wall_clearance: float,
     margin: float,
     max_radius: float,
     speed_limit: float,
@@ -352,12 +358,18 @@ def occupancy_to_loop_osm(
     occupied_threshold: int = 50,
     treat_unknown_as_occupied: bool = True,
 ) -> "tuple[str, LoopParams]":
-    """Find the largest free rectangle, fit a loop, and return (osm, params)."""
+    """Find the largest free rectangle, fit a loop, and return (osm, params).
+
+    ``wall_clearance`` sizes the radius (the physical room the robot needs);
+    ``lane_width`` is the wider DRAWN lanelet width used only for the OSM bounds.
+    Keeping them separate lets the lanelet be drawn wide (for path_generator)
+    without shrinking the loop radius.
+    """
     rect = largest_free_rectangle(
         data, width, height, occupied_threshold, treat_unknown_as_occupied
     )
     params = rect_to_loop_params(
-        rect, resolution, origin_x, origin_y, lane_width, margin, max_radius
+        rect, resolution, origin_x, origin_y, wall_clearance, margin, max_radius
     )
     osm = generate_circle_loop_osm(
         params.center_x, params.center_y, params.radius,

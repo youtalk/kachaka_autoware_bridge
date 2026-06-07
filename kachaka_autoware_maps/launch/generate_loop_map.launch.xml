@@ -6,7 +6,8 @@
     writing the map directory. Defaults are tuned on the robot (see README).
   -->
   <arg name="output_dir" default="$(env HOME)/maps/kachaka_loop"/>
-  <arg name="lane_width" default="0.6"/>
+  <arg name="lane_width" default="1.3"/>
+  <arg name="wall_clearance" default="0.3"/>
   <arg name="margin" default="0.05"/>
   <arg name="max_radius" default="0.9"/>
   <arg name="speed_limit" default="0.3"/>
@@ -20,6 +21,7 @@
         name="generate_loop_map" output="screen">
     <param name="output_dir" value="$(var output_dir)"/>
     <param name="lane_width" value="$(var lane_width)"/>
+    <param name="wall_clearance" value="$(var wall_clearance)"/>
     <param name="margin" value="$(var margin)"/>
     <param name="max_radius" value="$(var max_radius)"/>
     <param name="speed_limit" value="$(var speed_limit)"/>
