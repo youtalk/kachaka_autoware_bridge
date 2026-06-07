@@ -8,7 +8,6 @@
     # drifts in (was issue C). 0.25 keeps the carrot in the clean forward zone:
     # offline-validated centerline cruise @0.4 m/s that self-corrects from drift.
     carrot_lead_fraction: 0.25
-    carrot_refresh_fraction: 0.30
     bringup_timeout_sec: 60.0
     loop_params_path: ""           # empty -> node default (~/maps/kachaka_loop/loop_params.yaml)
     session_dir: ""                # empty -> node default (~/endurance_runs)
