@@ -258,3 +258,30 @@ def test_exit_stop_reason_signal_is_operator() -> None:
 def test_exit_stop_reason_otherwise_is_fault() -> None:
     # Any other non-FSM exit (an unexpected exception) is recorded as a fault.
     assert exit_stop_reason(shutdown_via_signal=False) is StopReason.FAULT
+
+
+def test_stop_request_from_onto_ring_goes_to_stopping() -> None:
+    t = decide_transition(State.ONTO_RING, Observation(stop_request=StopReason.OPERATOR))
+    assert t.next_state is State.STOPPING
+    assert t.stop_reason is StopReason.OPERATOR
+    assert Action.WRITE_SESSION_RECORD in t.actions
+
+
+def test_stop_request_from_recovering_goes_to_stopping() -> None:
+    t = decide_transition(State.RECOVERING, Observation(stop_request=StopReason.DURATION))
+    assert t.next_state is State.STOPPING
+    assert t.stop_reason is StopReason.DURATION
+    assert Action.WRITE_SESSION_RECORD in t.actions
+
+
+def test_stop_request_from_init_goes_to_stopping() -> None:
+    t = decide_transition(State.INIT, Observation(stop_request=StopReason.OPERATOR))
+    assert t.next_state is State.STOPPING
+    assert Action.WRITE_SESSION_RECORD in t.actions
+
+
+def test_hard_fault_still_preempts_stop_request_outside_running() -> None:
+    t = decide_transition(
+        State.ONTO_RING, Observation(hard_fault=True, stop_request=StopReason.OPERATOR)
+    )
+    assert t.next_state is State.FAULT

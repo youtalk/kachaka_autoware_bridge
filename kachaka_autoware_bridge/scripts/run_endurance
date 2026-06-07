@@ -480,7 +480,11 @@ class EnduranceNode(Node):
                 and self.latest_mode is not None
                 and self.set_cli.service_is_ready()
             )
-            return Observation(bringup_ready=ready, bringup_timed_out=now > self._bringup_deadline)
+            return Observation(
+                bringup_ready=ready,
+                bringup_timed_out=now > self._bringup_deadline,
+                stop_request=self._stop_request,
+            )
         # DURATION cap and operator/SP4 stop request.
         stop = self._stop_request
         if stop is StopReason.NONE and self.max_duration_sec > 0.0 and \
@@ -507,6 +511,7 @@ class EnduranceNode(Node):
                 onto_ring_failed=self._onto_ring_failed,
                 onto_ring_exhausted=self._onto_ring_attempts >= ONTO_RING_MAX_ATTEMPTS,
                 hard_fault=hard,
+                stop_request=stop,
             )
         if self.state is State.RUNNING:
             # Transient: operation mode fell out of AUTONOMOUS during a moving step
@@ -536,6 +541,7 @@ class EnduranceNode(Node):
                 hard_fault=hard,
                 recovered=self._mode_is_autonomous(),
                 retry_exhausted=self._reengage_attempts >= MAX_REENGAGE_ATTEMPTS,
+                stop_request=stop,
             )
         return Observation(stop_request=stop)
 
