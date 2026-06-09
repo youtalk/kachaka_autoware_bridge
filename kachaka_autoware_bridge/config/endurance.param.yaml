@@ -2,10 +2,24 @@
   ros__parameters:
     seed: 12345
     max_duration_sec: 0.0          # 0 = no built-in cap (defer to SP4 / operator)
-    # Carrot lead/refresh in METRES of arc length (shape-agnostic). Lead long
-    # enough to cross a corner; refresh before arrival so the robot never stops
-    # at the carrot. Tune on-robot per shape.
-    carrot_lead_len: 1.2
+    # Carrot lead/refresh in METRES of arc length (shape-agnostic). Each route the
+    # robot drives is an arc of carrot_lead_len; refresh fires carrot_refresh_len
+    # before the goal so the robot never stops AT the carrot. Tune on-robot per
+    # shape.
+    #
+    # 2.55 m ~= a HALF-LAP of the circular endurance loop (total ~5.1 m): the
+    # carrot is placed at the antipode of the robot, so each plan is a half-circle
+    # arc (a full lap is two of them), halving the re-routes/stops per lap vs the
+    # old ~1.2 m quarter-lap lead. A half-lap is also the geometric MAXIMUM safe
+    # lead: at the antipode the ego-to-goal Euclidean distance is maximal (the
+    # diameter ~1.62 m) so the AD-API arrival check never early-fires, and it lands
+    # on the exact goal the ARRIVE step already drives on the real robot
+    # (centerline_goal_behind at half the loop -- see test_half_lap_carrot_*).
+    # Do NOT push toward a full lap: ~0.75 lap bows the path_generator
+    # goal-connection inward and a boundary cut chops the path (was issue C), and a
+    # full lap is degenerate (goal == start -> instant ARRIVED). For the
+    # rounded-rect / stop-line map a shorter corner-crossing lead may suit better.
+    carrot_lead_len: 2.55
     carrot_refresh_len: 0.5
     bringup_timeout_sec: 60.0
     loop_params_path: ""           # empty -> node default (~/maps/kachaka_loop/loop_params.yaml)
