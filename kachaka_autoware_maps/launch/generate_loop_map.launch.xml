@@ -16,6 +16,10 @@
   <arg name="occupied_threshold" default="50"/>
   <arg name="treat_unknown_as_occupied" default="true"/>
   <arg name="map_timeout" default="30.0"/>
+  <arg name="shape" default="circle"/>
+  <arg name="corner_radius" default="0.45"/>
+  <arg name="segments_per_corner" default="6"/>
+  <arg name="stop_lines_per_corner" default="1"/>
 
   <node pkg="kachaka_autoware_maps" exec="generate_loop_map"
         name="generate_loop_map" output="screen">
@@ -30,5 +34,9 @@
     <param name="occupied_threshold" value="$(var occupied_threshold)"/>
     <param name="treat_unknown_as_occupied" value="$(var treat_unknown_as_occupied)"/>
     <param name="map_timeout" value="$(var map_timeout)"/>
+    <param name="shape" value="$(var shape)"/>
+    <param name="corner_radius" value="$(var corner_radius)"/>
+    <param name="segments_per_corner" value="$(var segments_per_corner)"/>
+    <param name="stop_lines_per_corner" value="$(var stop_lines_per_corner)"/>
   </node>
 </launch>
