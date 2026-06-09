@@ -593,3 +593,30 @@ def test_occupancy_to_rounded_rect_osm_end_to_end():
                       if any(t.get("k") == "type" and t.get("v") == "stop_line"
                              for t in w.findall("tag"))]
     assert len(stop_line_ways) == 4
+
+
+def test_large_corner_radius_still_yields_four_stop_lines():
+    # corner_radius_request far larger than the rect -> clamped, but Fix 1 keeps a
+    # straight so all four corner stop lines are still emitted (not silently zero).
+    data = [0] * (80 * 80)  # 4 m x 4 m free
+    osm, loop_file = occupancy_to_rounded_rect_osm(
+        data, width=80, height=80, resolution=0.05, origin_x=-2.0, origin_y=-2.0,
+        lane_width=0.8, wall_clearance=0.3, margin=0.05, corner_radius=5.0,
+        speed_limit=0.3, segments_per_corner=6, stop_lines_per_corner=1,
+    )
+    root = _parse(osm)
+    stop_line_ways = [w for w in root.findall("way")
+                      if any(t.get("k") == "type" and t.get("v") == "stop_line"
+                             for t in w.findall("tag"))]
+    assert len(stop_line_ways) == 4
+    assert len(loop_file.rect.stop_line_segments) == 4
+
+
+def test_stop_lines_per_corner_above_one_raises():
+    data = [0] * (80 * 80)
+    with pytest.raises(ValueError):
+        occupancy_to_rounded_rect_osm(
+            data, width=80, height=80, resolution=0.05, origin_x=-2.0, origin_y=-2.0,
+            lane_width=0.8, wall_clearance=0.3, margin=0.05, corner_radius=0.5,
+            speed_limit=0.3, segments_per_corner=6, stop_lines_per_corner=2,
+        )

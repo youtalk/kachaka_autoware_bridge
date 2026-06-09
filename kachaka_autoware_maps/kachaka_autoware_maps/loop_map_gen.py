@@ -373,7 +373,9 @@ def rounded_rect_params_yaml(
 ) -> str:
     """Sidecar for a rounded-rectangle loop. Circle fields are written as the
     rectangle centre + the inscribed circle radius for schema stability; the
-    authoritative geometry is in the rect_* fields and shape=rounded_rectangle."""
+    authoritative geometry is in the rect_* fields and shape=rounded_rectangle.
+    The written ``radius`` is the inscribed half-shorter-side, NOT the corner arc
+    radius (that is ``corner_radius``)."""
     cx = (rect.x_min + rect.x_max) / 2.0
     cy = (rect.y_min + rect.y_max) / 2.0
     r = min(rect.x_max - rect.x_min, rect.y_max - rect.y_min) / 2.0
@@ -637,6 +639,8 @@ def rect_to_rounded_rect_params(
     """
     if resolution <= 0.0:
         raise ValueError(f"resolution must be > 0, got {resolution}")
+    if wall_clearance <= 0.0:
+        raise ValueError(f"wall_clearance must be > 0, got {wall_clearance}")
     inset = wall_clearance + margin
     x_min = origin_x + rect.col0 * resolution + inset
     x_max = origin_x + (rect.col0 + rect.cols) * resolution - inset
@@ -647,7 +651,11 @@ def rect_to_rounded_rect_params(
         raise ValueError(
             f"free rectangle too small after inset {inset}: {w:.2f} x {h:.2f} m"
         )
-    corner_radius = min(corner_radius_request, min(w, h) / 2.0)
+    # Leave a minimum straight run so _corner_entry_segments can always detect the
+    # four straight->arc transitions (a corner_radius at exactly min(w,h)/2 leaves
+    # zero straight and the corner entries become undetectable).
+    _MIN_STRAIGHT_M = 0.05
+    corner_radius = min(corner_radius_request, min(w, h) / 2.0 - _MIN_STRAIGHT_M)
     if corner_radius <= lane_width / 2.0:
         raise ValueError(
             f"corner_radius {corner_radius:.3f} must exceed lane_width/2 "
@@ -685,6 +693,11 @@ def _corner_entry_segments(
     for i in range(n):
         if on_arc(i) and not on_arc((i - 1) % n):
             entries.append((i - 1) % n)
+    if len(entries) != 4:
+        raise RuntimeError(
+            f"expected 4 corner arc-entry transitions, found {len(entries)}; "
+            "corner_radius may be too close to half the shorter centerline side"
+        )
     return entries[: 4 * count_per_corner]
 
 
@@ -698,6 +711,11 @@ def occupancy_to_rounded_rect_osm(
     """Find the largest free rectangle, fit a rounded-rectangle loop with stop
     lines at the corner approaches, and return (osm, LoopFile). Each corner gets
     ``stop_lines_per_corner`` stop line(s) on the straight just before its entry."""
+    if stop_lines_per_corner != 1:
+        raise ValueError(
+            f"stop_lines_per_corner must be 1 (only one stop line per corner is "
+            f"supported), got {stop_lines_per_corner}"
+        )
     rect = largest_free_rectangle(data, width, height, occupied_threshold, treat_unknown_as_occupied)
     rr = rect_to_rounded_rect_params(
         rect, resolution, origin_x, origin_y, wall_clearance, margin, lane_width, corner_radius
