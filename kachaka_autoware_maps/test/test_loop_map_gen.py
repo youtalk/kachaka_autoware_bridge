@@ -431,3 +431,86 @@ def test_rounded_rect_osm_loads_as_routable_cycle():
     assert len(lanelets) == len(verts)
     for ll in lanelets:
         assert len(graph.following(ll)) == 1
+
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    StopLineSpec,
+    generate_loop_osm_with_stop_lines,
+)
+
+
+def _rect_osm_with_stops():
+    verts = rounded_rect_centerline_vertices(0.0, 4.0, 0.0, 4.0, corner_radius=1.0,
+                                             segments_per_corner=4)
+    n = len(verts)
+    specs = [StopLineSpec(segment_index=n // 4), StopLineSpec(segment_index=3 * n // 4)]
+    return generate_loop_osm_with_stop_lines(verts, lane_width=0.8, speed_limit=0.3,
+                                             stop_lines=specs), specs
+
+
+def test_stop_line_ways_and_regelems_emitted():
+    osm, specs = _rect_osm_with_stops()
+    root = _parse(osm)
+    stop_line_ways = [w for w in root.findall("way")
+                      if any(t.get("k") == "type" and t.get("v") == "stop_line"
+                             for t in w.findall("tag"))]
+    assert len(stop_line_ways) == len(specs)
+    regelems = [r for r in root.findall("relation")
+                if any(t.get("k") == "subtype" and t.get("v") == "traffic_sign"
+                       for t in r.findall("tag"))]
+    assert len(regelems) == len(specs)
+    for rel in regelems:
+        roles = sorted(m.get("role") for m in rel.findall("member"))
+        assert roles == ["ref_line", "refers"]
+    sign_ways = [w for w in root.findall("way")
+                 if any(t.get("k") == "subtype" and t.get("v") == "stop_sign"
+                        for t in w.findall("tag"))]
+    assert len(sign_ways) == len(specs)
+
+
+def test_each_stop_line_is_referenced_by_a_lanelet():
+    osm, specs = _rect_osm_with_stops()
+    root = _parse(osm)
+    regelem_ids = {r.get("id") for r in root.findall("relation")
+                   if any(t.get("k") == "subtype" and t.get("v") == "traffic_sign"
+                          for t in r.findall("tag"))}
+    referenced = set()
+    for rel in root.findall("relation"):
+        for m in rel.findall("member"):
+            if m.get("role") == "regulatory_element":
+                referenced.add(m.get("ref"))
+    assert regelem_ids <= referenced
+
+
+def test_stop_line_crosses_the_lane_width():
+    osm, _ = _rect_osm_with_stops()
+    root = _parse(osm)
+    nodes = {nd.get("id"): nd for nd in root.findall("node")}
+    for way in root.findall("way"):
+        if any(t.get("k") == "type" and t.get("v") == "stop_line" for t in way.findall("tag")):
+            refs = [nd.get("ref") for nd in way.findall("nd")]
+            pts = []
+            for rid in refs:
+                t = {k.get("k"): float(k.get("v")) for k in nodes[rid].findall("tag")
+                     if k.get("k") in ("local_x", "local_y")}
+                pts.append((t["local_x"], t["local_y"]))
+            span = math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1])
+            assert span == pytest.approx(0.8, abs=0.05)
+
+
+def test_stop_line_regelem_attached_to_lanelet_via_lanelet2():
+    pytest.importorskip("lanelet2")
+    import os
+    import tempfile
+    from lanelet2 import io, projection
+
+    osm, specs = _rect_osm_with_stops()
+    h = tempfile.NamedTemporaryFile("w", suffix=".osm", delete=False)
+    h.write(osm)
+    h.close()
+    try:
+        m = io.load(h.name, projection.UtmProjector(io.Origin(0.0, 0.0)))
+    finally:
+        os.unlink(h.name)
+    with_regelem = [ll for ll in m.laneletLayer if len(ll.regulatoryElements) > 0]
+    assert len(with_regelem) >= len(specs)

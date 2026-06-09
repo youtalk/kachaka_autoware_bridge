@@ -488,3 +488,83 @@ def occupancy_to_loop_osm(
         lane_width, speed_limit, num_segments,
     )
     return osm, params
+
+
+@dataclass(frozen=True)
+class StopLineSpec:
+    """A stop line to emit at the START vertex of lanelet ``segment_index``."""
+
+    segment_index: int
+
+
+def generate_loop_osm_with_stop_lines(
+    vertices: list[tuple[float, float]],
+    lane_width: float,
+    speed_limit: float,
+    stop_lines: "list[StopLineSpec] | None" = None,
+) -> str:
+    """generate_loop_osm + Autoware stop-line regulatory geometry.
+
+    Each StopLineSpec emits: a ``type=stop_line`` way across the lane at the
+    segment's start vertex; a small ``type=traffic_sign, subtype=stop_sign``
+    refers way beside the lane; a ``type=regulatory_element, subtype=traffic_sign``
+    relation with ref_line=stop_line + refers=sign; and a ``regulatory_element``
+    member added to that segment's lanelet. This is exactly what
+    autoware_behavior_velocity_stop_line_module consumes. Raises ValueError on an
+    out-of-range segment_index.
+    """
+    base = generate_loop_osm(vertices, lane_width, speed_limit)
+    if not stop_lines:
+        return base
+    n = len(vertices)
+    normals = _vertex_normals(vertices)
+    half = lane_width / 2.0
+    nid = 100 * n + 1
+    extra_nodes, extra_ways, extra_rels = [], [], []
+    lanelet_regelem_members: dict[int, list[int]] = {}
+
+    for spec in stop_lines:
+        if not (0 <= spec.segment_index < n):
+            raise ValueError(f"segment_index {spec.segment_index} out of range [0,{n})")
+        cx, cy = vertices[spec.segment_index]
+        nx, ny = normals[spec.segment_index]
+        a_id, b_id = nid, nid + 1
+        extra_nodes.append(_node_xml(a_id, cx + half * nx, cy + half * ny))
+        extra_nodes.append(_node_xml(b_id, cx - half * nx, cy - half * ny))
+        stop_way = nid + 2
+        extra_ways.append(
+            f'  <way id="{stop_way}"><nd ref="{a_id}"/><nd ref="{b_id}"/>'
+            f'<tag k="type" v="stop_line"/></way>'
+        )
+        s_id, t_id = nid + 3, nid + 4
+        ox, oy = cx + (half + 0.1) * nx, cy + (half + 0.1) * ny
+        extra_nodes.append(_node_xml(s_id, ox - 0.05 * ny, oy + 0.05 * nx))
+        extra_nodes.append(_node_xml(t_id, ox + 0.05 * ny, oy - 0.05 * nx))
+        sign_way = nid + 5
+        extra_ways.append(
+            f'  <way id="{sign_way}"><nd ref="{s_id}"/><nd ref="{t_id}"/>'
+            f'<tag k="type" v="traffic_sign"/><tag k="subtype" v="stop_sign"/></way>'
+        )
+        regelem = nid + 6
+        extra_rels.append(
+            f'  <relation id="{regelem}">\n'
+            f'    <member type="way" ref="{stop_way}" role="ref_line"/>\n'
+            f'    <member type="way" ref="{sign_way}" role="refers"/>\n'
+            f'    <tag k="type" v="regulatory_element"/>\n'
+            f'    <tag k="subtype" v="traffic_sign"/>\n'
+            f"  </relation>"
+        )
+        lanelet_id = 4 * n + spec.segment_index + 1
+        lanelet_regelem_members.setdefault(lanelet_id, []).append(regelem)
+        nid += 10
+
+    out = base.replace(_OSM_FOOTER, "")
+    out += "\n".join(extra_nodes) + "\n" + "\n".join(extra_ways) + "\n" + "\n".join(extra_rels) + "\n"
+    for lanelet_id, regelems in lanelet_regelem_members.items():
+        members = "".join(
+            f'    <member type="relation" ref="{re}" role="regulatory_element"/>\n'
+            for re in regelems
+        )
+        anchor = f'  <relation id="{lanelet_id}">\n'
+        out = out.replace(anchor, anchor + members, 1)
+    return out + _OSM_FOOTER
