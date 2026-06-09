@@ -522,3 +522,30 @@ def test_stop_line_out_of_range_segment_raises():
     with pytest.raises(ValueError):
         generate_loop_osm_with_stop_lines(verts, lane_width=0.8, speed_limit=0.3,
                                           stop_lines=[StopLineSpec(segment_index=len(verts))])
+
+
+from kachaka_autoware_maps.loop_map_gen import RoundedRectFile, rounded_rect_params_yaml  # noqa: E402
+
+
+def test_old_circle_file_parses_with_shape_circle():
+    text = (
+        "center_x: 0.0\ncenter_y: 0.0\nradius: 0.9\n"
+        "lane_width: 1.3\nspeed_limit: 0.3\nnum_segments: 16\n"
+    )
+    f = parse_loop_params(text)
+    assert f.shape == "circle"
+    assert f.radius == pytest.approx(0.9)
+
+
+def test_rounded_rect_sidecar_round_trip():
+    text = rounded_rect_params_yaml(
+        RoundedRectFile(x_min=0.0, x_max=3.0, y_min=0.0, y_max=2.0,
+                        corner_radius=0.5, segments_per_corner=6,
+                        stop_line_segments=(3, 9)),
+        lane_width=0.8, speed_limit=0.3, travel_direction="counterclockwise",
+    )
+    f = parse_loop_params(text)
+    assert f.shape == "rounded_rectangle"
+    assert f.rect == RoundedRectFile(0.0, 3.0, 0.0, 2.0, 0.5, 6, (3, 9))
+    assert f.lane_width == pytest.approx(0.8)
+    assert f.travel_direction == "counterclockwise"

@@ -316,6 +316,19 @@ def generate_circle_loop_osm(
 
 
 @dataclass(frozen=True)
+class RoundedRectFile:
+    """Rounded-rectangle centerline geometry stored in loop_params.yaml."""
+
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    corner_radius: float
+    segments_per_corner: int
+    stop_line_segments: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class LoopFile:
     """Full contents of loop_params.yaml (centre/radius + sizing + direction)."""
 
@@ -326,6 +339,8 @@ class LoopFile:
     speed_limit: float
     num_segments: int
     travel_direction: str
+    shape: str = "circle"
+    rect: "RoundedRectFile | None" = None
 
 
 def loop_params_yaml(
@@ -352,15 +367,51 @@ def loop_params_yaml(
     )
 
 
-def parse_loop_params(text: str) -> "LoopFile":
-    """Parse loop_params.yaml text into a LoopFile (inverse of loop_params_yaml).
+def rounded_rect_params_yaml(
+    rect: "RoundedRectFile", lane_width: float, speed_limit: float,
+    travel_direction: str = LOADED_TRAVEL_DIRECTION,
+) -> str:
+    """Sidecar for a rounded-rectangle loop. Circle fields are written as the
+    rectangle centre + the inscribed circle radius for schema stability; the
+    authoritative geometry is in the rect_* fields and shape=rounded_rectangle."""
+    cx = (rect.x_min + rect.x_max) / 2.0
+    cy = (rect.y_min + rect.y_max) / 2.0
+    r = min(rect.x_max - rect.x_min, rect.y_max - rect.y_min) / 2.0
+    seg = ",".join(str(s) for s in rect.stop_line_segments)
+    return (
+        f"shape: rounded_rectangle\n"
+        f"center_x: {cx}\ncenter_y: {cy}\nradius: {r}\n"
+        f"lane_width: {lane_width}\nspeed_limit: {speed_limit}\n"
+        f"num_segments: 0\n"
+        f"travel_direction: {travel_direction}\n"
+        f"rect_x_min: {rect.x_min}\nrect_x_max: {rect.x_max}\n"
+        f"rect_y_min: {rect.y_min}\nrect_y_max: {rect.y_max}\n"
+        f"corner_radius: {rect.corner_radius}\n"
+        f"segments_per_corner: {rect.segments_per_corner}\n"
+        f"stop_line_segments: \"{seg}\"\n"
+    )
 
-    Shared loader so every consumer reads the same schema and it can't drift. A
-    file written before travel_direction existed defaults to
-    LOADED_TRAVEL_DIRECTION. Raises KeyError on a missing required field and
-    ValueError on a non-numeric value.
+
+def parse_loop_params(text: str) -> "LoopFile":
+    """Parse loop_params.yaml text into a LoopFile (inverse of the *_yaml writers).
+
+    Old circle files (no ``shape`` field) parse as shape='circle'. A
+    rounded_rectangle file additionally carries rect_* geometry. Raises KeyError
+    on a missing required field and ValueError on a non-numeric value.
     """
     data = yaml.safe_load(text) or {}
+    shape = str(data.get("shape", "circle"))
+    rect = None
+    if shape == "rounded_rectangle":
+        seg_raw = str(data.get("stop_line_segments", "")).strip()
+        segs = tuple(int(s) for s in seg_raw.split(",") if s != "")
+        rect = RoundedRectFile(
+            x_min=float(data["rect_x_min"]), x_max=float(data["rect_x_max"]),
+            y_min=float(data["rect_y_min"]), y_max=float(data["rect_y_max"]),
+            corner_radius=float(data["corner_radius"]),
+            segments_per_corner=int(data["segments_per_corner"]),
+            stop_line_segments=segs,
+        )
     return LoopFile(
         center_x=float(data["center_x"]),
         center_y=float(data["center_y"]),
@@ -369,6 +420,8 @@ def parse_loop_params(text: str) -> "LoopFile":
         speed_limit=float(data["speed_limit"]),
         num_segments=int(data["num_segments"]),
         travel_direction=str(data.get("travel_direction", LOADED_TRAVEL_DIRECTION)),
+        shape=shape,
+        rect=rect,
     )
 
 
