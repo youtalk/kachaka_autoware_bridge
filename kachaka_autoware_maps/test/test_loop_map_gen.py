@@ -524,7 +524,10 @@ def test_stop_line_out_of_range_segment_raises():
                                           stop_lines=[StopLineSpec(segment_index=len(verts))])
 
 
-from kachaka_autoware_maps.loop_map_gen import RoundedRectFile, rounded_rect_params_yaml  # noqa: E402
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    RoundedRectFile,
+    rounded_rect_params_yaml,
+)
 
 
 def test_old_circle_file_parses_with_shape_circle():
@@ -549,3 +552,44 @@ def test_rounded_rect_sidecar_round_trip():
     assert f.rect == RoundedRectFile(0.0, 3.0, 0.0, 2.0, 0.5, 6, (3, 9))
     assert f.lane_width == pytest.approx(0.8)
     assert f.travel_direction == "counterclockwise"
+
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    occupancy_to_rounded_rect_osm,
+    rect_to_rounded_rect_params,
+)
+
+
+def test_rect_to_rounded_rect_insets_by_clearance_and_caps_corner():
+    rect = FreeRectangle(row0=0, col0=0, row1=59, col1=59)  # 3 m x 3 m
+    rr = rect_to_rounded_rect_params(
+        rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+        wall_clearance=0.3, margin=0.05, lane_width=0.8, corner_radius_request=0.45,
+    )
+    assert rr.x_min == pytest.approx(0.35)
+    assert rr.x_max == pytest.approx(2.65)
+    assert rr.corner_radius == pytest.approx(0.45)
+
+
+def test_rect_to_rounded_rect_enforces_corner_radius_gt_half_lane():
+    rect = FreeRectangle(row0=0, col0=0, row1=59, col1=59)
+    with pytest.raises(ValueError):
+        rect_to_rounded_rect_params(
+            rect, resolution=0.05, origin_x=0.0, origin_y=0.0,
+            wall_clearance=0.3, margin=0.05, lane_width=1.3, corner_radius_request=0.5,
+        )
+
+
+def test_occupancy_to_rounded_rect_osm_end_to_end():
+    data = [0] * (80 * 80)  # 4 m x 4 m free
+    osm, loop_file = occupancy_to_rounded_rect_osm(
+        data, width=80, height=80, resolution=0.05, origin_x=-2.0, origin_y=-2.0,
+        lane_width=0.8, wall_clearance=0.3, margin=0.05, corner_radius=0.5,
+        speed_limit=0.3, segments_per_corner=6, stop_lines_per_corner=1,
+    )
+    assert loop_file.shape == "rounded_rectangle"
+    root = _parse(osm)
+    stop_line_ways = [w for w in root.findall("way")
+                      if any(t.get("k") == "type" and t.get("v") == "stop_line"
+                             for t in w.findall("tag"))]
+    assert len(stop_line_ways) == 4

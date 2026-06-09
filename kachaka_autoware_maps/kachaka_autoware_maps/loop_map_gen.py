@@ -621,3 +621,99 @@ def generate_loop_osm_with_stop_lines(
         anchor = f'  <relation id="{lanelet_id}">\n'
         out = out.replace(anchor, anchor + members, 1)
     return out + _OSM_FOOTER
+
+
+def rect_to_rounded_rect_params(
+    rect: "FreeRectangle", resolution: float, origin_x: float, origin_y: float,
+    wall_clearance: float, margin: float, lane_width: float, corner_radius_request: float,
+) -> "RoundedRectFile":
+    """Map a free-cell rectangle to a rounded-rectangle centerline (map frame).
+
+    The centerline rectangle is the free rectangle inset by wall_clearance+margin
+    on every side (the physical room the robot needs; the drawn lane may overhang
+    the virtual walls). ``corner_radius`` is the requested value clamped to half
+    the shorter centerline side, and must exceed lane_width/2 so the inner drawn
+    bound stays valid (else ValueError -- widen the radius or narrow the lane).
+    """
+    if resolution <= 0.0:
+        raise ValueError(f"resolution must be > 0, got {resolution}")
+    inset = wall_clearance + margin
+    x_min = origin_x + rect.col0 * resolution + inset
+    x_max = origin_x + (rect.col0 + rect.cols) * resolution - inset
+    y_min = origin_y + rect.row0 * resolution + inset
+    y_max = origin_y + (rect.row0 + rect.rows) * resolution - inset
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(
+            f"free rectangle too small after inset {inset}: {w:.2f} x {h:.2f} m"
+        )
+    corner_radius = min(corner_radius_request, min(w, h) / 2.0)
+    if corner_radius <= lane_width / 2.0:
+        raise ValueError(
+            f"corner_radius {corner_radius:.3f} must exceed lane_width/2 "
+            f"{lane_width / 2.0:.3f} (inner bound would fold); widen the radius "
+            "or narrow the lane"
+        )
+    return RoundedRectFile(
+        x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
+        corner_radius=corner_radius, segments_per_corner=0, stop_line_segments=(),
+    )
+
+
+def _corner_entry_segments(
+    vertices: list[tuple[float, float]], rr: "RoundedRectFile", count_per_corner: int
+) -> list[int]:
+    """Segment indices on the straight just before each corner arc (the stop
+    points). A vertex starts a corner arc when its distance to the nearest corner
+    centre is ~corner_radius AND the previous vertex was on a straight; we take
+    the index just before each such transition."""
+    centres = [
+        (rr.x_min + rr.corner_radius, rr.y_min + rr.corner_radius),
+        (rr.x_max - rr.corner_radius, rr.y_min + rr.corner_radius),
+        (rr.x_max - rr.corner_radius, rr.y_max - rr.corner_radius),
+        (rr.x_min + rr.corner_radius, rr.y_max - rr.corner_radius),
+    ]
+    n = len(vertices)
+
+    def on_arc(i: int) -> bool:
+        x, y = vertices[i]
+        return any(
+            abs(math.hypot(x - cx, y - cy) - rr.corner_radius) < 1e-6 for cx, cy in centres
+        )
+
+    entries = []
+    for i in range(n):
+        if on_arc(i) and not on_arc((i - 1) % n):
+            entries.append((i - 1) % n)
+    return entries[: 4 * count_per_corner]
+
+
+def occupancy_to_rounded_rect_osm(
+    data: list[int], width: int, height: int, resolution: float,
+    origin_x: float, origin_y: float, *,
+    lane_width: float, wall_clearance: float, margin: float, corner_radius: float,
+    speed_limit: float, segments_per_corner: int, stop_lines_per_corner: int = 1,
+    occupied_threshold: int = 50, treat_unknown_as_occupied: bool = True,
+) -> "tuple[str, LoopFile]":
+    """Find the largest free rectangle, fit a rounded-rectangle loop with stop
+    lines at the corner approaches, and return (osm, LoopFile). Each corner gets
+    ``stop_lines_per_corner`` stop line(s) on the straight just before its entry."""
+    rect = largest_free_rectangle(data, width, height, occupied_threshold, treat_unknown_as_occupied)
+    rr = rect_to_rounded_rect_params(
+        rect, resolution, origin_x, origin_y, wall_clearance, margin, lane_width, corner_radius
+    )
+    verts = rounded_rect_centerline_vertices(
+        rr.x_min, rr.x_max, rr.y_min, rr.y_max, rr.corner_radius, segments_per_corner
+    )
+    stop_segments = _corner_entry_segments(verts, rr, count_per_corner=stop_lines_per_corner)
+    rr = RoundedRectFile(
+        rr.x_min, rr.x_max, rr.y_min, rr.y_max, rr.corner_radius,
+        segments_per_corner, tuple(stop_segments),
+    )
+    osm = generate_loop_osm_with_stop_lines(
+        verts, lane_width, speed_limit,
+        stop_lines=[StopLineSpec(s) for s in stop_segments],
+    )
+    text = rounded_rect_params_yaml(rr, lane_width, speed_limit)
+    loop_file = parse_loop_params(text)
+    return osm, loop_file
