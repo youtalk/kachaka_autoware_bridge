@@ -26,7 +26,11 @@ class GoalPose:
 
 
 def _normalize_angle(a: float) -> float:
-    """Wrap an angle to [-pi, pi]."""
+    """Wrap an angle to [-pi, pi].
+
+    The exact boundary behaviour is float-dependent: atan2(sin(-pi), cos(-pi))
+    returns -pi because sin(-pi) is a small negative float rather than exact 0.
+    """
     return math.atan2(math.sin(a), math.cos(a))
 
 

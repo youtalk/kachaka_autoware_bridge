@@ -1,13 +1,15 @@
 # Copyright 2026 Yutaka Kondo
 # Licensed under the Apache License, Version 2.0 (the "License").
 
-"""Pure-geometry helpers for routing the robot around the circular loop.
+"""Pure-geometry helpers for routing the robot around a closed loop (circle or polyline).
 
 No ROS imports: unit-tested with plain pytest. scripts/set_loop_route reads the
 loop centre/radius/travel-direction (loop_params.yaml from kachaka_autoware_maps)
 and the robot's current pose, then uses these to (1) place the robot onto the
 loop facing the travel direction and (2) put an AD-API route goal just behind the
 robot so a route in the travel direction covers a near-complete lap.
+
+The centerline_* family takes a Centerline object (see centerline.py) and works for any closed polyline.
 
 Travel direction matters: ``autoware_route_handler`` rejects a start lanelet
 whose centerline direction differs from the ego heading by more than 90 deg
@@ -254,7 +256,8 @@ def centerline_progress(
     prev_s: float, curr_s: float, total_length: float, travel_direction: str
 ) -> float:
     """Forward arc length (m) travelled prev_s -> curr_s along travel, shortest
-    signed step (wrap-safe). Positive = forward. Raises on unknown direction."""
+    signed step (wrap-safe). Positive = forward; a tie at exactly half the loop
+    resolves as forward. Raises on unknown direction."""
     sign = _direction_sign(travel_direction)
     d = (curr_s - prev_s) % total_length
     if d > total_length / 2.0:

@@ -75,6 +75,13 @@ def _circle_vertices(cx, cy, r, n):
             for k in range(n)]
 
 
+def test_centerline_remaining_cw_forward():
+    from kachaka_autoware_bridge.loop_route import CLOCKWISE, centerline_remaining
+    cl = Centerline([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)])
+    # CW (backward along stored order): from s=1.0 only 0.5 m back to s=0.5.
+    assert centerline_remaining(1.0, 0.5, cl.total_length, CLOCKWISE) == pytest.approx(0.5)
+
+
 def test_circle_centerline_matches_old_carrot_goal():
     cx, cy, r = 0.98, 0.13, 0.81
     cl = Centerline(_circle_vertices(cx, cy, r, 720))

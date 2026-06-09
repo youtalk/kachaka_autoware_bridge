@@ -267,7 +267,7 @@ def test_should_refresh_ccw_direction() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task A2: direction-aware Centerline helpers
+# Task A4: direction-aware Centerline helpers
 # ---------------------------------------------------------------------------
 
 from kachaka_autoware_bridge.centerline import Centerline  # noqa: E402
