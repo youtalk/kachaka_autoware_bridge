@@ -341,6 +341,87 @@ def parse_loop_params(text: str) -> "LoopFile":
     )
 
 
+def circle_centerline_vertices(
+    center_x: float, center_y: float, radius: float, num_segments: int
+) -> list[tuple[float, float]]:
+    """Vertices of a regular ``num_segments``-gon on the circle (CCW order)."""
+    if num_segments < 3:
+        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    if radius <= 0.0:
+        raise ValueError(f"radius must be > 0, got {radius}")
+    return [
+        (center_x + radius * math.cos(2.0 * math.pi * i / num_segments),
+         center_y + radius * math.sin(2.0 * math.pi * i / num_segments))
+        for i in range(num_segments)
+    ]
+
+
+def rounded_rect_centerline_vertices(
+    x_min: float, x_max: float, y_min: float, y_max: float,
+    corner_radius: float, segments_per_corner: int = 6,
+) -> list[tuple[float, float]]:
+    """Vertices of a rounded-rectangle centerline (CCW), straights joined by four
+    quarter-circle corners of ``corner_radius``. Raises ValueError if the radius
+    does not fit the rectangle (> half the shorter side) or is non-positive.
+
+    Each corner arc is sampled with ``segments_per_corner + 1`` points (including
+    both endpoints). The straight run between consecutive corners is represented by
+    one additional midpoint (at the midpoint of the run) if the run has nonzero
+    length, ensuring axis-aligned straight runs have vertices on them. Duplicate
+    points are removed after assembly so shared endpoints are not repeated.
+    """
+    if corner_radius <= 0.0:
+        raise ValueError(f"corner_radius must be > 0, got {corner_radius}")
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(f"degenerate rectangle {w} x {h}")
+    if corner_radius > min(w, h) / 2.0 + 1e-9:
+        raise ValueError(
+            f"corner_radius {corner_radius} exceeds half the shorter side "
+            f"{min(w, h) / 2.0}"
+        )
+    r = corner_radius
+    # Each entry: (corner_center_x, corner_center_y, arc_start_angle_radians).
+    # Arc sweeps CCW (increasing angle) by π/2. Traversal: bottom-right corner
+    # (270°→360°), top-right (0°→90°), top-left (90°→180°), bottom-left (180°→270°).
+    corners = [
+        (x_max - r, y_min + r, 1.5 * math.pi),   # bottom-right: 270°→360°
+        (x_max - r, y_max - r, 0.0),              # top-right:    0°→90°
+        (x_min + r, y_max - r, 0.5 * math.pi),   # top-left:     90°→180°
+        (x_min + r, y_min + r, math.pi),          # bottom-left:  180°→270°
+    ]
+    # Pre-compute the arc endpoint that each corner ENDS on (= start of next straight).
+    corner_ends: list[tuple[float, float]] = []
+    for cx, cy, a0 in corners:
+        a_end = a0 + math.pi / 2.0
+        corner_ends.append((cx + r * math.cos(a_end), cy + r * math.sin(a_end)))
+
+    verts: list[tuple[float, float]] = []
+    n = len(corners)
+    for i in range(n):
+        cx, cy, a0 = corners[i]
+        # Emit corner arc (segments_per_corner+1 points including both endpoints).
+        for k in range(segments_per_corner + 1):
+            a = a0 + (math.pi / 2.0) * k / segments_per_corner
+            verts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        # Emit the midpoint of the straight run to the next corner's start.
+        run_start = corner_ends[i]
+        # Next corner starts at: (cx_next + r*cos(a0_next), cy_next + r*sin(a0_next))
+        cx_next, cy_next, a0_next = corners[(i + 1) % n]
+        run_end = (cx_next + r * math.cos(a0_next), cy_next + r * math.sin(a0_next))
+        mid = ((run_start[0] + run_end[0]) / 2.0, (run_start[1] + run_end[1]) / 2.0)
+        if math.hypot(mid[0] - run_start[0], mid[1] - run_start[1]) > 1e-9:
+            verts.append(mid)
+
+    deduped: list[tuple[float, float]] = []
+    for v in verts:
+        if not deduped or math.hypot(v[0] - deduped[-1][0], v[1] - deduped[-1][1]) > 1e-9:
+            deduped.append(v)
+    if math.hypot(deduped[0][0] - deduped[-1][0], deduped[0][1] - deduped[-1][1]) <= 1e-9:
+        deduped.pop()
+    return deduped
+
+
 def occupancy_to_loop_osm(
     data: list[int],
     width: int,

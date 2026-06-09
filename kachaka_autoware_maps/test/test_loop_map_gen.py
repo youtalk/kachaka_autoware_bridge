@@ -347,3 +347,37 @@ def test_wide_drawn_lane_does_not_shrink_the_radius() -> None:
         }
         radii.add(round(math.hypot(tags["local_x"] - wide.center_x, tags["local_y"] - wide.center_y), 3))
     assert radii == {round(wide.radius - 0.65, 3), round(wide.radius + 0.65, 3)}
+
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    circle_centerline_vertices,
+    rounded_rect_centerline_vertices,
+)
+
+
+def test_circle_vertices_count_and_radius():
+    v = circle_centerline_vertices(1.0, 2.0, 0.8, num_segments=16)
+    assert len(v) == 16
+    for x, y in v:
+        assert math.hypot(x - 1.0, y - 2.0) == pytest.approx(0.8)
+
+
+def test_rounded_rect_vertices_lie_within_the_rectangle():
+    v = rounded_rect_centerline_vertices(0.0, 3.0, 0.0, 2.0, corner_radius=0.5,
+                                         segments_per_corner=6)
+    assert len(v) >= 4 * 6
+    for x, y in v:
+        assert -1e-9 <= x <= 3.0 + 1e-9
+        assert -1e-9 <= y <= 2.0 + 1e-9
+
+
+def test_rounded_rect_has_axis_aligned_straight_runs():
+    v = rounded_rect_centerline_vertices(0.0, 4.0, 0.0, 4.0, corner_radius=1.0,
+                                         segments_per_corner=4)
+    ys_on_bottom = [y for x, y in v if 1.0 < x < 3.0 and y < 0.5]
+    assert ys_on_bottom and all(yy == pytest.approx(0.0) for yy in ys_on_bottom)
+
+
+def test_rounded_rect_corner_radius_must_fit():
+    with pytest.raises(ValueError):
+        rounded_rect_centerline_vertices(0.0, 5.0, 0.0, 2.0, corner_radius=2.0)
