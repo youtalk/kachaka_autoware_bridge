@@ -145,6 +145,8 @@ class EnduranceNode(Node):
         self.declare_parameter("seed", 12345)
         self.declare_parameter("max_duration_sec", 0.0)
         self.declare_parameter("bringup_timeout_sec", 60.0)
+        self.declare_parameter("carrot_lead_len", 1.2)
+        self.declare_parameter("carrot_refresh_len", 0.5)
         self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
 
         loop_params_value = str(self.get_parameter("loop_params_path").value)
@@ -157,8 +159,6 @@ class EnduranceNode(Node):
         self.bringup_timeout_sec = float(self.get_parameter("bringup_timeout_sec").value)
         self.centerline = centerline_from_loop_file(self.loop)
         self.total_len = self.centerline.total_length
-        self.declare_parameter("carrot_lead_len", 1.2)
-        self.declare_parameter("carrot_refresh_len", 0.5)
         self.carrot_lead = float(self.get_parameter("carrot_lead_len").value)
         self.carrot_refresh = float(self.get_parameter("carrot_refresh_len").value)
         session_dir_value = str(self.get_parameter("session_dir").value)

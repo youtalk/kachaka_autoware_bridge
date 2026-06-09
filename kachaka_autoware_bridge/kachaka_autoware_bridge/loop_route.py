@@ -5,9 +5,10 @@
 
 No ROS imports: unit-tested with plain pytest. scripts/set_loop_route reads the
 loop centre/radius/travel-direction (loop_params.yaml from kachaka_autoware_maps)
-and the robot's current pose, then uses these to (1) place the robot onto the
-loop facing the travel direction and (2) put an AD-API route goal just behind the
-robot so a route in the travel direction covers a near-complete lap.
+and the robot's current pose. Runtime consumers (run_endurance, set_loop_route)
+build a Centerline (centerline.py) from the loop params and route along its arc
+length; the circle helpers (ring_pose_at, carrot_goal, etc.) remain for the
+circle shape.
 
 The centerline_* family takes a Centerline object (see centerline.py) and works for any closed polyline.
 
@@ -37,8 +38,8 @@ TRAVEL_DIRECTIONS = (CLOCKWISE, COUNTERCLOCKWISE)
 
 
 def _direction_sign(travel_direction: str) -> float:
-    """+1 if theta increases along travel (counter-clockwise), -1 if it decreases
-    (clockwise). Raises ValueError on an unknown direction."""
+    """+1 when travel runs along the stored (counter-clockwise) order,
+    -1 when reversed (clockwise). Raises ValueError on an unknown direction."""
     if travel_direction == COUNTERCLOCKWISE:
         return 1.0
     if travel_direction == CLOCKWISE:

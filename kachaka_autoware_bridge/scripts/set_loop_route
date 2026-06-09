@@ -121,6 +121,7 @@ class SetLoopRouteNode(Node):
 
         rx, ry, _ = self._pose()
         behind_len = self.behind_len if self.behind_len > 0.0 else max(0.6, self.centerline.total_length / 8.0)
+        self.get_logger().info(f"Using behind_len={behind_len:.3f} m for the lap goal.")
         goal = centerline_goal_behind(self.centerline, rx, ry, behind_len, travel_direction)
 
         if self.clear_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
