@@ -358,3 +358,34 @@ def test_centerline_from_rounded_rect_loop_file():
     cl = centerline_from_loop_file(lf)
     _, err = cl.project(1.5, 0.0)
     assert err == pytest.approx(0.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Half-lap carrot: a carrot_lead_len of total/2 reuses the proven ARRIVE goal
+# ---------------------------------------------------------------------------
+
+
+def test_half_lap_carrot_equals_arrive_antipode_goal():
+    # The half-lap carrot (lead_len = total/2) lands on the SAME point the ARRIVE
+    # step already drives on the real robot via centerline_goal_behind(behind_len =
+    # total/2): advancing +L/2 and -L/2 along a closed loop reach one arc position.
+    # This is the safety basis for setting carrot_lead_len to a half-lap -- the goal
+    # sits at the antipode, the maximum ego-to-goal Euclidean distance (the diameter
+    # on a circle), so the AD-API arrival check never early-fires (the near-full-lap
+    # trap that makes a full-lap carrot land on the start and ARRIVE instantly).
+    # Holds for both travel directions on the real offset, odd-radius (8-gon)
+    # endurance loop.
+    cx, cy, r = 0.98, 0.13, 0.8125
+    lf = LoopFile(cx, cy, r, 1.3, 0.3, 8, COUNTERCLOCKWISE)
+    cl = centerline_from_loop_file(lf)
+    half = cl.total_length / 2.0
+    for direction in (CLOCKWISE, COUNTERCLOCKWISE):
+        for theta in (0.0, math.pi / 2, 2.0, -1.3):
+            rx, ry = cx + r * math.cos(theta), cy + r * math.sin(theta)
+            carrot = centerline_carrot(cl, rx, ry, lead_len=half, travel_direction=direction)
+            arrive = centerline_goal_behind(cl, rx, ry, behind_len=half, travel_direction=direction)
+            assert (carrot.x, carrot.y) == pytest.approx((arrive.x, arrive.y))
+            assert _angdiff(carrot.yaw, arrive.yaw) == pytest.approx(0.0)
+            # ...and the goal is far (antipode of an even-sided polygon -> central
+            # reflection), well beyond any plausible ~1 m arrival threshold.
+            assert math.hypot(carrot.x - rx, carrot.y - ry) > 1.4
