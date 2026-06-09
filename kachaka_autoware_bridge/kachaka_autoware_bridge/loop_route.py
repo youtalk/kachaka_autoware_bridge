@@ -274,3 +274,32 @@ def centerline_remaining(
     if sign > 0:
         return (goal_s - robot_s) % total_length
     return (robot_s - goal_s) % total_length
+
+
+def centerline_from_loop_file(loop_file) -> Centerline:
+    """Build the runtime Centerline from a parsed loop_params.yaml (LoopFile).
+
+    circle -> a num_segments-gon; rounded_rectangle -> straights + corner arcs.
+    Imported lazily so the pure-geometry module has no hard maps dependency at
+    import time."""
+    from kachaka_autoware_maps.loop_map_gen import (
+        circle_centerline_vertices,
+        rounded_rect_centerline_vertices,
+    )
+
+    if loop_file.shape == "rounded_rectangle":
+        r = loop_file.rect
+        if r is None:
+            raise ValueError("rounded_rectangle loop_file has no rect geometry")
+        return Centerline(
+            rounded_rect_centerline_vertices(
+                r.x_min, r.x_max, r.y_min, r.y_max, r.corner_radius,
+                r.segments_per_corner,
+            )
+        )
+    segments = loop_file.num_segments if loop_file.num_segments >= 3 else 720
+    return Centerline(
+        circle_centerline_vertices(
+            loop_file.center_x, loop_file.center_y, loop_file.radius, segments
+        )
+    )

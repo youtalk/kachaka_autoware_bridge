@@ -330,3 +330,31 @@ def test_centerline_helpers_reject_unknown_direction():
         centerline_progress(0.0, 1.0, cl.total_length, "sideways")
     with pytest.raises(ValueError):
         centerline_carrot(cl, 0.0, -1.0, lead_len=1.0, travel_direction="")
+
+
+# ---------------------------------------------------------------------------
+# Task D1: centerline_from_loop_file
+# ---------------------------------------------------------------------------
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    LoopFile,
+    RoundedRectFile,
+)
+from kachaka_autoware_bridge.loop_route import centerline_from_loop_file  # noqa: E402
+
+
+def test_centerline_from_circle_loop_file():
+    lf = LoopFile(0.0, 0.0, 0.8, 1.3, 0.3, 16, CLOCKWISE)
+    cl = centerline_from_loop_file(lf)
+    _, err = cl.project(0.8, 0.0)
+    assert err == pytest.approx(0.0, abs=0.05)
+    assert cl.total_length == pytest.approx(2 * math.pi * 0.8, rel=0.02)
+
+
+def test_centerline_from_rounded_rect_loop_file():
+    rect = RoundedRectFile(0.0, 3.0, 0.0, 2.0, 0.5, 6, (3, 9))
+    lf = LoopFile(1.5, 1.0, 1.0, 0.8, 0.3, 0, COUNTERCLOCKWISE,
+                  shape="rounded_rectangle", rect=rect)
+    cl = centerline_from_loop_file(lf)
+    _, err = cl.project(1.5, 0.0)
+    assert err == pytest.approx(0.0, abs=1e-6)
