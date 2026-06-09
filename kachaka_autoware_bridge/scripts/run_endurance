@@ -57,7 +57,6 @@ from kachaka_autoware_bridge.endurance import (
     exit_stop_reason,
 )
 from kachaka_autoware_bridge.loop_route import (
-    CLOCKWISE,
     COUNTERCLOCKWISE,
     centerline_carrot,
     centerline_from_loop_file,
@@ -86,7 +85,12 @@ ONTO_RING_BACKOFF_SEC = 5.0      # spacing between onto-ring retries (lets Kacha
 STEP_SETTLE_SEC = 3.0            # ignore mode!=AUTONOMOUS this long after a step begins
 SET_CLI_STALE_SEC = 5.0  # set_route service not-ready this long -> hard fault (debounce DDS flaps)
 ARRIVE_TIMEOUT_SEC = 120.0       # ARRIVE backstop: advance even if RouteState.ARRIVED never fires
-HOP_SETTLE_SEC = 4.0             # CRUISE: robot stopped this long -> reached carrot, hop forward
+HOP_SETTLE_SEC = 4.0             # CRUISE: robot stopped this long -> reached carrot, hop forward.
+# This stop-detection is only a FALLBACK; the primary carrot refresh is geometry-
+# based (centerline_remaining <= carrot_refresh_len). It MUST stay above the
+# behavior_velocity stop_line module's stop duration (~2 s default) so a planned
+# stop-line halt at a corner does not look like "reached the carrot" and trigger a
+# premature hop. If a longer stop-line duration is ever configured, raise this.
 HOP_COOLDOWN_SEC = 3.0           # min spacing between carrot hops (route_state ARRIVED lags clear+set)
 MOVE_EPS_MPS = 0.03              # speed below this counts as stopped
 # Mid-RUNNING re-centering trigger: radial error this far off the loop centerline
