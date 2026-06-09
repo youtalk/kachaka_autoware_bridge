@@ -59,3 +59,28 @@ def test_too_few_vertices_raise():
 
 def test_returns_goalpose_type():
     assert isinstance(_square().pose_at(0.0), GoalPose)
+
+
+# Circle parity: a finely-sampled circle Centerline reproduces the old circle
+# helpers, so the arc-length cutover does not regress circle behaviour.
+from kachaka_autoware_bridge.loop_route import (  # noqa: E402
+    CLOCKWISE,
+    carrot_goal,
+    centerline_carrot,
+)
+
+
+def _circle_vertices(cx, cy, r, n):
+    return [(cx + r * math.cos(2 * math.pi * k / n), cy + r * math.sin(2 * math.pi * k / n))
+            for k in range(n)]
+
+
+def test_circle_centerline_matches_old_carrot_goal():
+    cx, cy, r = 0.98, 0.13, 0.81
+    cl = Centerline(_circle_vertices(cx, cy, r, 720))
+    lead_len = (2 * math.pi * r) / 8.0
+    rx, ry = cx + r, cy
+    new = centerline_carrot(cl, rx, ry, lead_len, CLOCKWISE)
+    old = carrot_goal(cx, cy, r, rx, ry, lead_angle_rad=2 * math.pi / 8.0, travel_direction=CLOCKWISE)
+    assert (new.x, new.y) == pytest.approx((old.x, old.y), abs=2e-2)
+    assert abs(math.atan2(math.sin(new.yaw - old.yaw), math.cos(new.yaw - old.yaw))) < 5e-2
