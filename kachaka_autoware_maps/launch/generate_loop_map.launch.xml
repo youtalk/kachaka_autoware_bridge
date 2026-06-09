@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <!--
-    Generate a circular loop lanelet2 map from /kachaka/mapping/map. Run with
+    Generate a loop (circle or rounded rectangle) lanelet2 map from /kachaka/mapping/map. Run with
     the Kachaka bridge up and the robot OFF the dock. One-shot: exits after
     writing the map directory. Defaults are tuned on the robot (see README).
   -->
@@ -16,8 +16,16 @@
   <arg name="occupied_threshold" default="50"/>
   <arg name="treat_unknown_as_occupied" default="true"/>
   <arg name="map_timeout" default="30.0"/>
+  <!--
+    shape:=circle (default) or rounded_rectangle. For rounded_rectangle the
+    generator requires corner_radius > lane_width/2 (the inner drawn bound must
+    not fold), so the default corner_radius (0.7) is valid with the default
+    lane_width (1.3) and yields a stadium-ish loop. For CRISP four 90-deg corners
+    in a tight room, pass a moderate lane and smaller radius, e.g.
+    lane_width:=0.8 corner_radius:=0.45.
+  -->
   <arg name="shape" default="circle"/>
-  <arg name="corner_radius" default="0.45"/>
+  <arg name="corner_radius" default="0.7"/>
   <arg name="segments_per_corner" default="6"/>
   <arg name="stop_lines_per_corner" default="1"/>
 

@@ -2,10 +2,11 @@
 # Copyright 2026 Yutaka Kondo
 # Licensed under the Apache License, Version 2.0 (the "License").
 
-"""Snapshot /kachaka/mapping/map and write a circular loop lanelet2 map.
+"""Snapshot /kachaka/mapping/map and write a loop lanelet2 map (circle or rounded rectangle).
 
 Captures one OccupancyGrid (latched / transient_local), finds the largest free
-rectangle, fits a circular one-way loop inside it, and writes the map directory:
+rectangle, fits a one-way loop inside it using the shape selected by the ``shape``
+parameter (``circle`` or ``rounded_rectangle``), and writes the map directory:
   lanelet2_map.osm, map_projector_info.yaml, loop_params.yaml
 
 Run with the Kachaka bridge up and the robot OFF the dock (the body LiDAR only
@@ -51,7 +52,7 @@ class GenerateLoopMapNode(Node):
         self.declare_parameter("treat_unknown_as_occupied", True)
         self.declare_parameter("map_timeout", DEFAULT_MAP_TIMEOUT_SEC)
         self.declare_parameter("shape", "circle")
-        self.declare_parameter("corner_radius", 0.45)
+        self.declare_parameter("corner_radius", 0.7)
         self.declare_parameter("segments_per_corner", 6)
         self.declare_parameter("stop_lines_per_corner", 1)
 
