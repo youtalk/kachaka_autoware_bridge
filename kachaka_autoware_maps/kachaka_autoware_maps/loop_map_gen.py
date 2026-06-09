@@ -185,73 +185,74 @@ _OSM_HEADER = (
 _OSM_FOOTER = "</osm>\n"
 
 
-def generate_circle_loop_osm(
-    center_x: float,
-    center_y: float,
-    radius: float,
+def _node_xml(nid: int, x: float, y: float) -> str:
+    return (
+        f'  <node id="{nid}" lat="0.0" lon="0.0">'
+        f'<tag k="local_x" v="{x:.6f}"/>'
+        f'<tag k="local_y" v="{y:.6f}"/>'
+        f'<tag k="ele" v="0.0"/></node>'
+    )
+
+
+def _vertex_normals(vertices: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Unit normal at each vertex (mean of adjacent segment normals). For a
+    regular polygon this is the radial direction, so the circle bounds match the
+    old generator exactly."""
+    n = len(vertices)
+    seg_norm = []
+    for i in range(n):
+        x0, y0 = vertices[i]
+        x1, y1 = vertices[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy) or 1.0
+        seg_norm.append((-dy / length, dx / length))
+    normals = []
+    for i in range(n):
+        nx = seg_norm[i - 1][0] + seg_norm[i][0]
+        ny = seg_norm[i - 1][1] + seg_norm[i][1]
+        length = math.hypot(nx, ny) or 1.0
+        normals.append((nx / length, ny / length))
+    return normals
+
+
+def generate_loop_osm(
+    vertices: list[tuple[float, float]],
     lane_width: float,
     speed_limit: float,
-    num_segments: int,
 ) -> str:
-    """Return a lanelet2 OSM document for one circular counter-clockwise loop.
+    """lanelet2 OSM for a one-way loop along ``vertices`` (implicitly closed).
 
-    The centerline is a circle of `radius` m about (center_x, center_y) in the
-    map frame (Local projector: node local_x/local_y are map-frame metres). The
-    circle is split into `num_segments` arcs; each arc is one lanelet whose left
-    bound is the inner circle (radius - lane_width/2) and right bound the outer
-    circle (radius + lane_width/2) — correct for counter-clockwise travel.
-    Consecutive arcs SHARE their cross-section node ids and the last arc reuses
-    arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
-
-    `speed_limit` is in **m/s** (the generator's natural input unit). It is
-    converted to **km/h** before being written to the OSM ``speed_limit`` tag,
-    per the lanelet2 / Autoware convention (Autoware sample maps use km/h).
-
-    Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
-    radius would be non-positive), or if lane_width/speed_limit are non-positive.
+    One lanelet per segment; left bound = centerline + normal*lane_width/2, right
+    bound = centerline - normal*lane_width/2; consecutive segments share their
+    cross-section node ids and the last reuses segment 0's, so the routing graph
+    is a closed cycle. ``speed_limit`` is m/s, written to the OSM tag in km/h.
+    Raises ValueError on < 3 vertices or non-positive lane_width/speed_limit.
     """
-    if num_segments < 3:
-        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    n = len(vertices)
+    if n < 3:
+        raise ValueError(f"need >= 3 vertices, got {n}")
     if lane_width <= 0.0:
         raise ValueError(f"lane_width must be > 0, got {lane_width}")
     if speed_limit <= 0.0:
         raise ValueError(f"speed_limit must be > 0, got {speed_limit}")
-    inner = radius - lane_width / 2.0
-    outer = radius + lane_width / 2.0
-    if inner <= 0.0:
-        raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
-
-    # lanelet2 speed_limit tag is in km/h; convert from the m/s input.
+    half = lane_width / 2.0
+    normals = _vertex_normals(vertices)
     speed_limit_kmh = speed_limit * 3.6
 
-    # Node ids: inner (left) 1..N at cross-sections 0..N-1; outer (right) N+1..2N.
-    left_ids: list[int] = []
-    right_ids: list[int] = []
-    node_xml: list[str] = []
-    for i in range(num_segments):
-        theta = 2.0 * math.pi * i / num_segments
-        cos_t, sin_t = math.cos(theta), math.sin(theta)
-        left_id = i + 1
-        right_id = num_segments + i + 1
+    left_ids, right_ids, node_xml = [], [], []
+    for i in range(n):
+        cx, cy = vertices[i]
+        nx, ny = normals[i]
+        left_id, right_id = i + 1, n + i + 1
         left_ids.append(left_id)
         right_ids.append(right_id)
-        for nid, rad in ((left_id, inner), (right_id, outer)):
-            x = center_x + rad * cos_t
-            y = center_y + rad * sin_t
-            node_xml.append(
-                f'  <node id="{nid}" lat="0.0" lon="0.0">'
-                f'<tag k="local_x" v="{x:.6f}"/>'
-                f'<tag k="local_y" v="{y:.6f}"/>'
-                f'<tag k="ele" v="0.0"/></node>'
-            )
+        node_xml.append(_node_xml(left_id, cx + half * nx, cy + half * ny))
+        node_xml.append(_node_xml(right_id, cx - half * nx, cy - half * ny))
 
-    way_xml: list[str] = []
-    relation_xml: list[str] = []
-    for i in range(num_segments):
-        j = (i + 1) % num_segments
-        left_way = 2 * num_segments + i + 1
-        right_way = 3 * num_segments + i + 1
-        lanelet = 4 * num_segments + i + 1
+    way_xml, relation_xml = [], []
+    for i in range(n):
+        j = (i + 1) % n
+        left_way, right_way, lanelet = 2 * n + i + 1, 3 * n + i + 1, 4 * n + i + 1
         way_xml.append(
             f'  <way id="{left_way}"><nd ref="{left_ids[i]}"/><nd ref="{left_ids[j]}"/>'
             f'<tag k="type" v="line_thin"/><tag k="subtype" v="solid"/></way>'
@@ -273,14 +274,44 @@ def generate_circle_loop_osm(
         )
 
     return (
-        _OSM_HEADER
-        + "\n".join(node_xml)
-        + "\n"
-        + "\n".join(way_xml)
-        + "\n"
-        + "\n".join(relation_xml)
-        + "\n"
-        + _OSM_FOOTER
+        _OSM_HEADER + "\n".join(node_xml) + "\n" + "\n".join(way_xml) + "\n"
+        + "\n".join(relation_xml) + "\n" + _OSM_FOOTER
+    )
+
+
+def generate_circle_loop_osm(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    lane_width: float,
+    speed_limit: float,
+    num_segments: int,
+) -> str:
+    """Circular one-way loop OSM (kept for the circle shape + existing callers).
+    Delegates to generate_loop_osm over a regular-polygon centerline.
+
+    The centerline is a circle of `radius` m about (center_x, center_y) in the
+    map frame (Local projector: node local_x/local_y are map-frame metres). The
+    circle is split into `num_segments` arcs; each arc is one lanelet whose left
+    bound is the inner circle (radius - lane_width/2) and right bound the outer
+    circle (radius + lane_width/2) — correct for counter-clockwise travel.
+    Consecutive arcs SHARE their cross-section node ids and the last arc reuses
+    arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
+
+    `speed_limit` is in **m/s** (the generator's natural input unit). It is
+    converted to **km/h** before being written to the OSM ``speed_limit`` tag,
+    per the lanelet2 / Autoware convention (Autoware sample maps use km/h).
+
+    Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
+    radius would be non-positive), or if lane_width/speed_limit are non-positive.
+    """
+    if num_segments < 3:
+        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    if radius - lane_width / 2.0 <= 0.0:
+        raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
+    return generate_loop_osm(
+        circle_centerline_vertices(center_x, center_y, radius, num_segments),
+        lane_width, speed_limit,
     )
 
 

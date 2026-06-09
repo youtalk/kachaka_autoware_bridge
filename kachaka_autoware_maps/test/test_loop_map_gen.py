@@ -381,3 +381,53 @@ def test_rounded_rect_has_axis_aligned_straight_runs():
 def test_rounded_rect_corner_radius_must_fit():
     with pytest.raises(ValueError):
         rounded_rect_centerline_vertices(0.0, 5.0, 0.0, 2.0, corner_radius=2.0)
+
+
+from kachaka_autoware_maps.loop_map_gen import generate_loop_osm  # noqa: E402
+
+
+def test_generate_loop_osm_counts_match_segments():
+    verts = circle_centerline_vertices(0.0, 0.0, 0.9, 8)
+    root = _parse(generate_loop_osm(verts, lane_width=0.6, speed_limit=0.3))
+    assert len(root.findall("node")) == 16
+    assert len(root.findall("way")) == 16
+    assert len(root.findall("relation")) == 8
+
+
+def test_generate_loop_osm_bounds_are_lane_width_apart():
+    verts = circle_centerline_vertices(1.0, 2.0, 0.9, 4)
+    root = _parse(generate_loop_osm(verts, lane_width=0.6, speed_limit=0.3))
+    radii = set()
+    for node in root.findall("node"):
+        t = {k.get("k"): float(k.get("v")) for k in node.findall("tag")
+             if k.get("k") in ("local_x", "local_y")}
+        radii.add(round(math.hypot(t["local_x"] - 1.0, t["local_y"] - 2.0), 3))
+    assert radii == {round(0.9 - 0.3, 3), round(0.9 + 0.3, 3)}
+
+
+def test_rounded_rect_osm_loads_as_routable_cycle():
+    pytest.importorskip("lanelet2")
+    import os
+    import tempfile
+    from lanelet2 import io, projection, routing, traffic_rules
+
+    verts = rounded_rect_centerline_vertices(0.0, 3.0, 0.0, 2.0, corner_radius=0.5,
+                                             segments_per_corner=4)
+    osm = generate_loop_osm(verts, lane_width=0.6, speed_limit=0.3)
+    h = tempfile.NamedTemporaryFile("w", suffix=".osm", delete=False)
+    h.write(osm)
+    h.close()
+    try:
+        m = io.load(h.name, projection.UtmProjector(io.Origin(0.0, 0.0)))
+    finally:
+        os.unlink(h.name)
+    for p in m.pointLayer:
+        a = p.attributes
+        if "local_x" in a:
+            p.x, p.y = float(a["local_x"]), float(a["local_y"])
+    rules = traffic_rules.create(traffic_rules.Locations.Germany, traffic_rules.Participants.Vehicle)
+    graph = routing.RoutingGraph(m, rules)
+    lanelets = list(m.laneletLayer)
+    assert len(lanelets) == len(verts)
+    for ll in lanelets:
+        assert len(graph.following(ll)) == 1
