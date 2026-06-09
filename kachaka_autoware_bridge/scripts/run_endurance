@@ -57,10 +57,13 @@ from kachaka_autoware_bridge.endurance import (
     exit_stop_reason,
 )
 from kachaka_autoware_bridge.loop_route import (
-    angular_position,
-    carrot_goal,
-    compute_lap_goal,
-    signed_progress,
+    CLOCKWISE,
+    COUNTERCLOCKWISE,
+    centerline_carrot,
+    centerline_from_loop_file,
+    centerline_goal_behind,
+    centerline_progress,
+    centerline_remaining,
 )
 from kachaka_autoware_bridge.ring_driver import RADIAL_ON_RING_TOLERANCE_M, RingDriver
 from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
@@ -141,7 +144,6 @@ class EnduranceNode(Node):
         )
         self.declare_parameter("seed", 12345)
         self.declare_parameter("max_duration_sec", 0.0)
-        self.declare_parameter("carrot_lead_fraction", 0.25)
         self.declare_parameter("bringup_timeout_sec", 60.0)
         self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
 
@@ -152,8 +154,13 @@ class EnduranceNode(Node):
         self.loop = parse_loop_params(loop_params_path.read_text())
         self.seed = int(self.get_parameter("seed").value)
         self.max_duration_sec = float(self.get_parameter("max_duration_sec").value)
-        self.carrot_lead = 2.0 * math.pi * float(self.get_parameter("carrot_lead_fraction").value)
         self.bringup_timeout_sec = float(self.get_parameter("bringup_timeout_sec").value)
+        self.centerline = centerline_from_loop_file(self.loop)
+        self.total_len = self.centerline.total_length
+        self.declare_parameter("carrot_lead_len", 1.2)
+        self.declare_parameter("carrot_refresh_len", 0.5)
+        self.carrot_lead = float(self.get_parameter("carrot_lead_len").value)
+        self.carrot_refresh = float(self.get_parameter("carrot_refresh_len").value)
         session_dir_value = str(self.get_parameter("session_dir").value)
         if not session_dir_value:
             session_dir_value = str(Path.home() / "endurance_runs")
@@ -196,8 +203,8 @@ class EnduranceNode(Node):
         self.state = State.INIT
         self.start_wall = time.monotonic()
         self.start_iso = _now_iso()
-        self.lap_accum_rad = 0.0
-        self._prev_theta: float | None = None
+        self.lap_accum_len = 0.0
+        self._prev_s: float | None = None
         self._step_hist: Counter = Counter()
         self._fault_info: str | None = None
         self._travel_direction = self.loop.travel_direction
@@ -210,7 +217,10 @@ class EnduranceNode(Node):
         self._next_onto_ring_wall = 0.0
         self._recenter_count = 0
         self._current_step = None
-        self._step_started_lap = 0.0
+        self._step_started_len = 0.0
+        self._carrot_s = None
+        self._stop_count = 0
+        self._stopped_logged = False
         self._next_hop_wall = 0.0
         self._dwell_deadline = 0.0
         self._bringup_deadline = self.start_wall + self.bringup_timeout_sec
@@ -271,7 +281,7 @@ class EnduranceNode(Node):
             name="endurance_orchestrator",
             message=self.state.value,
             values=[
-                KeyValue(key="laps", value=f"{self.lap_accum_rad / (2.0 * math.pi):.2f}"),
+                KeyValue(key="laps", value=f"{self.lap_accum_len / self.total_len:.2f}"),
                 KeyValue(key="uptime_s", value=f"{time.monotonic() - self.start_wall:.0f}"),
                 KeyValue(
                     key="step",
@@ -279,6 +289,7 @@ class EnduranceNode(Node):
                 ),
                 KeyValue(key="seed", value=str(self.seed)),
                 KeyValue(key="recenters", value=str(self._recenter_count)),
+                KeyValue(key="stops", value=str(self._stop_count)),
             ],
         )
         arr = DiagnosticArray()
@@ -386,16 +397,28 @@ class EnduranceNode(Node):
         if self.latest_odom is None:
             return
         x, y, _ = self._pose()
-        theta = angular_position(self.loop.center_x, self.loop.center_y, x, y)
-        # signed_progress uses the shortest signed arc, so this is correct only
-        # while the per-tick angular step stays < pi. At the generated loop radius
-        # and <=0.3 m/s with ~0.1 s ticks the step is far below pi; it would only
-        # break on a very small radius combined with a multi-second blocking tick.
-        if self._prev_theta is not None:
-            self.lap_accum_rad += signed_progress(self._prev_theta, theta, self._travel_direction)
-        self._prev_theta = theta
+        s, _ = self.centerline.project(x, y)
+        # centerline_progress uses the shortest signed arc, correct while the
+        # per-tick step stays < total/2 (true at <=0.3 m/s with ~0.1 s ticks).
+        if self._prev_s is not None:
+            self.lap_accum_len += centerline_progress(
+                self._prev_s, s, self.total_len, self._travel_direction
+            )
+        self._prev_s = s
         if abs(self.latest_odom.twist.twist.linear.x) >= MOVE_EPS_MPS:
             self._last_moving_wall = time.monotonic()
+            self._stopped_logged = False
+        elif (
+            self._in_moving_step()
+            and self._mode_is_autonomous()
+            and not self._stopped_logged
+        ):
+            # A halt while AUTONOMOUS during a moving step with the trajectory
+            # present is a PLANNED stop (stop line). Carrot-hop reroutes drop to
+            # STOP mode, so those are excluded here. Count once per halt.
+            self._stop_count += 1
+            self._stopped_logged = True
+            self._emit_event("stop_observed", lap=self.lap_accum_len / self.total_len)
 
     def _mode_is_autonomous(self) -> bool:
         return (
@@ -414,14 +437,13 @@ class EnduranceNode(Node):
         return rs is not None and rs.state == RouteState.ARRIVED
 
     def _radial_error(self) -> float:
-        """Absolute distance of the ego from the loop centerline (0 = on it). Used
-        to detect outward tracking drift during RUNNING so it can be re-centered."""
+        """Absolute distance of the ego from the loop centerline (0 = on it),
+        from the polyline projection. Drives mid-RUNNING re-centering."""
         if self.latest_odom is None:
             return 0.0
         x, y, _ = self._pose()
-        return abs(
-            math.hypot(x - self.loop.center_x, y - self.loop.center_y) - self.loop.radius
-        )
+        _, lateral = self.centerline.project(x, y)
+        return lateral
 
     # ---- top-level tick ----
     def _tick(self) -> None:
@@ -444,7 +466,7 @@ class EnduranceNode(Node):
                     "recenter",
                     n=self._recenter_count,
                     r_err=round(self._radial_error(), 3),
-                    lap=self.lap_accum_rad / (2.0 * math.pi),
+                    lap=self.lap_accum_len / self.total_len,
                 )
             self._execute(transition)
             self.state = transition.next_state
@@ -607,7 +629,7 @@ class EnduranceNode(Node):
         step = self.scheduler.next_step()
         self._current_step = step
         self._step_hist[step.mode.value] += 1
-        self._step_started_lap = self.lap_accum_rad
+        self._step_started_len = self.lap_accum_len
         self._step_started_wall = time.monotonic()
         self._emit_event("step_begin", mode=step.mode.value, speed=step.target_speed_mps,
                          extent=step.extent)
@@ -624,9 +646,9 @@ class EnduranceNode(Node):
             # A half-lap-ish distinct goal (antipodal at fraction 0.5) so the
             # Euclidean arrival check fires correctly (not the near-full-lap
             # early-ARRIVED trap), exercising the ARRIVED -> re-route path.
-            goal = compute_lap_goal(
-                self.loop.center_x, self.loop.center_y, self.loop.radius, x, y,
-                behind_angle_rad=2.0 * math.pi * step.extent,
+            goal = centerline_goal_behind(
+                self.centerline, x, y,
+                behind_len=self.total_len * step.extent,
                 travel_direction=self._travel_direction,
             )
             # Re-route via STOP -> clear -> set: the prior step's route may be
@@ -640,17 +662,17 @@ class EnduranceNode(Node):
             self._change_mode(True)
 
     def _place_carrot(self, robot_x: float, robot_y: float) -> None:
-        """Place a carrot goal carrot_lead ahead of the robot. Re-routes via
-        _reroute (stop -> clear -> set): the carrot route the robot is following is
-        'in use' and cannot be cleared/overwritten until a STOP transition releases
-        it, so a naive clear+set leaves the carrot frozen (see _reroute)."""
-        goal = carrot_goal(
-            self.loop.center_x, self.loop.center_y, self.loop.radius,
-            robot_x, robot_y, self.carrot_lead, self._travel_direction,
+        """Place a carrot goal carrot_lead metres ahead of the robot along travel,
+        and record its arc length for the geometry-based refresh. Re-routes via
+        _reroute (stop -> clear -> set): the active carrot route is 'in use' until
+        a STOP releases it (see _reroute)."""
+        goal = centerline_carrot(
+            self.centerline, robot_x, robot_y, self.carrot_lead, self._travel_direction
         )
+        s_robot, _ = self.centerline.project(robot_x, robot_y)
+        sign = 1.0 if self._travel_direction == COUNTERCLOCKWISE else -1.0
+        self._carrot_s = self.centerline.advance(s_robot, sign * self.carrot_lead)
         self._reroute(goal)
-        # Give the robot time to start moving toward the fresh carrot before the
-        # stop-detector can fire again.
         self._last_moving_wall = time.monotonic()
 
     def _run_scenario_tick(self) -> None:
@@ -665,20 +687,20 @@ class EnduranceNode(Node):
             return
         x, y, _ = self._pose()
         if step.mode is StepMode.CRUISE:
-            # This AD-API rejects re-routing while driving and does not reliably
-            # flip route_state to ARRIVED at the goal, so hop the carrot forward
-            # once the robot has reached it and settled (stopped) -- the only
-            # reason to stop in CRUISE is reaching the carrot, and clear+set from
-            # a halt succeeds. The step ends once its lap extent is met.
+            if (self.lap_accum_len - self._step_started_len) >= self.total_len * step.extent:
+                self._begin_next_step()
+                return
+            s_robot, _ = self.centerline.project(x, y)
+            remaining = (
+                centerline_remaining(s_robot, self._carrot_s, self.total_len, self._travel_direction)
+                if self._carrot_s is not None else 0.0
+            )
             settled = (time.monotonic() - self._last_moving_wall) > HOP_SETTLE_SEC
-            if (self._route_arrived() or settled) and time.monotonic() >= self._next_hop_wall:
-                if (self.lap_accum_rad - self._step_started_lap) >= 2.0 * math.pi * step.extent:
-                    self._begin_next_step()
-                    return
+            if (remaining <= self.carrot_refresh or settled) and time.monotonic() >= self._next_hop_wall:
                 self._emit_event(
                     "carrot_hop",
-                    lap=self.lap_accum_rad / (2.0 * math.pi),
-                    arrived=self._route_arrived(),
+                    lap=self.lap_accum_len / self.total_len,
+                    remaining=round(remaining, 2),
                 )
                 self._place_carrot(x, y)
                 self._change_mode(True)
@@ -686,12 +708,12 @@ class EnduranceNode(Node):
         elif step.mode is StepMode.ARRIVE:
             rs = self.latest_route_state
             if rs is not None and rs.state == RouteState.ARRIVED:
-                self._emit_event("arrived", lap=self.lap_accum_rad / (2.0 * math.pi))
+                self._emit_event("arrived", lap=self.lap_accum_len / self.total_len)
                 self._begin_next_step()
             elif (time.monotonic() - self._step_started_wall) > ARRIVE_TIMEOUT_SEC:
                 # Liveness backstop: never let a missing ARRIVED permanently stall
                 # the harness (the next step re-engages motion via a fresh carrot).
-                self._emit_event("arrive_timeout", lap=self.lap_accum_rad / (2.0 * math.pi))
+                self._emit_event("arrive_timeout", lap=self.lap_accum_len / self.total_len)
                 self._begin_next_step()
 
     def _capture_diagnostics(self) -> None:
@@ -710,11 +732,12 @@ class EnduranceNode(Node):
             start_iso=self.start_iso,
             end_iso=_now_iso(),
             stop_reason=reason,
-            lap_count=self.lap_accum_rad / (2.0 * math.pi),
+            lap_count=self.lap_accum_len / self.total_len,
             step_histogram=dict(self._step_hist),
             seed=self.seed,
             fault_info=self._fault_info,
             recenter_count=self._recenter_count,
+            stop_count=self._stop_count,
         )
         out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
         out.write_text(record.to_json())
