@@ -37,7 +37,7 @@ from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.node import Node
 
-from kachaka_autoware_bridge.loop_route import compute_lap_goal
+from kachaka_autoware_bridge.loop_route import centerline_from_loop_file, centerline_goal_behind
 from kachaka_autoware_bridge.ring_driver import RingDriver
 from kachaka_autoware_bridge.trajectory_gen import yaw_to_quaternion
 from kachaka_autoware_maps.loop_map_gen import parse_loop_params
@@ -60,21 +60,20 @@ class SetLoopRouteNode(Node):
         super().__init__("set_loop_route")
         self.declare_parameter("loop_params_path", DEFAULT_PARAMS)
         self.declare_parameter("odom_topic", DEFAULT_ODOM_TOPIC)
-        self.declare_parameter("behind_angle", 0.0)  # 0 => auto = 2*pi/num_segments
+        self.declare_parameter("behind_len", 0.0)  # 0 => auto
         self.declare_parameter("drive_onto_ring", True)
         self.declare_parameter("odom_timeout", DEFAULT_ODOM_TIMEOUT_SEC)
         self.declare_parameter("position_timeout", DEFAULT_POSITION_TIMEOUT_SEC)
 
         self.params_path = Path(str(self.get_parameter("loop_params_path").value)).expanduser()
         self.odom_topic = str(self.get_parameter("odom_topic").value)
-        self.behind_angle = float(self.get_parameter("behind_angle").value)
+        self.behind_len = float(self.get_parameter("behind_len").value)
         self.drive_onto_ring = bool(self.get_parameter("drive_onto_ring").value)
         self.odom_timeout_sec = float(self.get_parameter("odom_timeout").value)
         self.position_timeout_sec = float(self.get_parameter("position_timeout").value)
 
         self.loop = parse_loop_params(self.params_path.read_text())
-        if self.behind_angle <= 0.0:
-            self.behind_angle = 2.0 * math.pi / max(self.loop.num_segments, 3)
+        self.centerline = centerline_from_loop_file(self.loop)
 
         self.latest_odom: Odometry | None = None
         self.create_subscription(Odometry, self.odom_topic, self._on_odom, 1)
@@ -121,10 +120,9 @@ class SetLoopRouteNode(Node):
         self.ring.set_manual_control(True)
 
         rx, ry, _ = self._pose()
-        goal = compute_lap_goal(
-            self.loop.center_x, self.loop.center_y, self.loop.radius, rx, ry,
-            behind_angle_rad=self.behind_angle, travel_direction=travel_direction,
-        )
+        behind_len = self.behind_len if self.behind_len > 0.0 else max(0.6, self.centerline.total_length / 8.0)
+        self.get_logger().info(f"Using behind_len={behind_len:.3f} m for the lap goal.")
+        goal = centerline_goal_behind(self.centerline, rx, ry, behind_len, travel_direction)
 
         if self.clear_cli.wait_for_service(timeout_sec=DEFAULT_SERVICE_TIMEOUT_SEC):
             fut = self.clear_cli.call_async(ClearRoute.Request())

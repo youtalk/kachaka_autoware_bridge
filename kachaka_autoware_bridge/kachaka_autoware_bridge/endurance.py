@@ -240,6 +240,7 @@ class SessionRecord:
     seed: int
     fault_info: str | None = None
     recenter_count: int = 0   # mid-RUNNING drift re-centerings; recenters/lap = loop-tightness health
+    stop_count: int = 0  # planned/observed halts during RUNNING (e.g. stop lines)
 
     def to_json(self) -> str:
         def _default(obj: object) -> object:

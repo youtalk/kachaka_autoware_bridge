@@ -35,8 +35,9 @@ from rclpy.qos import (
 from std_srvs.srv import SetBool
 
 from kachaka_autoware_bridge.loop_route import (
-    nearest_ring_pose,
-    travel_direction_from_tangent,
+    CLOCKWISE,
+    COUNTERCLOCKWISE,
+    centerline_from_loop_file,
 )
 
 DEFAULT_MAP_TOPIC = "/map/vector_map"
@@ -62,6 +63,7 @@ class RingDriver:
     def __init__(self, node: Node, loop, position_timeout_sec: float = 120.0) -> None:
         self._node = node
         self._loop = loop
+        self._centerline = centerline_from_loop_file(loop)
         self._position_timeout_sec = position_timeout_sec
         self._latest_map: LaneletMapBin | None = None
         latched = QoSProfile(
@@ -108,18 +110,19 @@ class RingDriver:
                 handle.write(bytes(self._latest_map.data))
                 tmp = handle.name
             lmap = io.load(tmp, io.Origin(0.0, 0.0))
-            theta = math.atan2(robot_y - self._loop.center_y, robot_x - self._loop.center_x)
-            ring = core.BasicPoint2d(
-                self._loop.center_x + self._loop.radius * math.cos(theta),
-                self._loop.center_y + self._loop.radius * math.sin(theta),
-            )
+            s, _ = self._centerline.project(robot_x, robot_y)
+            on = self._centerline.pose_at(s)
+            ring = core.BasicPoint2d(on.x, on.y)
+            stored_tangent = on.yaw
             here = [ll for ll in lmap.laneletLayer if geometry.inside(ll, ring)]
             if not here:
-                self._log.warning(f"ring point in no lanelet; using '{fallback}'")
+                self._log.warning(f"projected point in no lanelet; using '{fallback}'")
                 return fallback
             c = here[0].centerline
-            tangent = math.atan2(c[-1].y - c[0].y, c[-1].x - c[0].x)
-            direction = travel_direction_from_tangent(theta, tangent)
+            lane_tangent = math.atan2(c[-1].y - c[0].y, c[-1].x - c[0].x)
+            aligned = abs(math.atan2(math.sin(lane_tangent - stored_tangent),
+                                     math.cos(lane_tangent - stored_tangent))) < math.pi / 2
+            direction = COUNTERCLOCKWISE if aligned else CLOCKWISE
             self._log.info(f"live map travel direction = {direction} (lanelet {here[0].id})")
             return direction
         except Exception as exc:  # noqa: BLE001 - any failure -> fall back
@@ -178,22 +181,20 @@ class RingDriver:
         robot_yaw: float,
         travel_direction: str,
     ) -> bool:
-        """Drive onto the nearest ring point facing travel, if not already there.
-        Returns True when the robot is on the ring (or already was)."""
-        target = nearest_ring_pose(
-            self._loop.center_x, self._loop.center_y, self._loop.radius,
-            robot_x, robot_y, travel_direction,
+        """Drive onto the nearest centerline point facing travel, if not already
+        there. Returns True when on the centerline (or already was)."""
+        s, lateral_err = self._centerline.project(robot_x, robot_y)
+        on = self._centerline.pose_at(s)
+        sign = 1.0 if travel_direction == COUNTERCLOCKWISE else -1.0
+        target_yaw = on.yaw if sign > 0 else math.atan2(
+            math.sin(on.yaw + math.pi), math.cos(on.yaw + math.pi)
         )
-        dist_err = abs(
-            math.hypot(robot_x - self._loop.center_x, robot_y - self._loop.center_y)
-            - self._loop.radius
-        )
-        yaw_err = _angle_diff(robot_yaw, target.yaw)
-        if dist_err <= RADIAL_ON_RING_TOLERANCE_M and yaw_err <= ALIGN_TOLERANCE_RAD:
+        yaw_err = _angle_diff(robot_yaw, target_yaw)
+        if lateral_err <= RADIAL_ON_RING_TOLERANCE_M and yaw_err <= ALIGN_TOLERANCE_RAD:
             self._log.info(
-                f"Already on the loop (radial err {dist_err:.3f} m, yaw err "
+                f"Already on the loop (lateral err {lateral_err:.3f} m, yaw err "
                 f"{math.degrees(yaw_err):.0f} deg); skipping drive-on."
             )
             return True
-        self.set_manual_control(False)  # Kachaka autonomous nav owns the move
-        return self.drive_to_pose(target.x, target.y, target.yaw)
+        self.set_manual_control(False)
+        return self.drive_to_pose(on.x, on.y, target_yaw)

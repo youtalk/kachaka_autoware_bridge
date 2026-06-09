@@ -2,10 +2,11 @@
 # Copyright 2026 Yutaka Kondo
 # Licensed under the Apache License, Version 2.0 (the "License").
 
-"""Snapshot /kachaka/mapping/map and write a circular loop lanelet2 map.
+"""Snapshot /kachaka/mapping/map and write a loop lanelet2 map (circle or rounded rectangle).
 
 Captures one OccupancyGrid (latched / transient_local), finds the largest free
-rectangle, fits a circular one-way loop inside it, and writes the map directory:
+rectangle, fits a one-way loop inside it using the shape selected by the ``shape``
+parameter (``circle`` or ``rounded_rectangle``), and writes the map directory:
   lanelet2_map.osm, map_projector_info.yaml, loop_params.yaml
 
 Run with the Kachaka bridge up and the robot OFF the dock (the body LiDAR only
@@ -27,6 +28,8 @@ from kachaka_autoware_maps.loop_map_gen import (
     MAP_PROJECTOR_INFO_YAML,
     loop_params_yaml,
     occupancy_to_loop_osm,
+    occupancy_to_rounded_rect_osm,
+    rounded_rect_params_yaml,
 )
 
 DEFAULT_INPUT_TOPIC = "/kachaka/mapping/map"
@@ -48,6 +51,10 @@ class GenerateLoopMapNode(Node):
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("treat_unknown_as_occupied", True)
         self.declare_parameter("map_timeout", DEFAULT_MAP_TIMEOUT_SEC)
+        self.declare_parameter("shape", "circle")
+        self.declare_parameter("corner_radius", 0.7)
+        self.declare_parameter("segments_per_corner", 6)
+        self.declare_parameter("stop_lines_per_corner", 1)
 
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
@@ -62,6 +69,10 @@ class GenerateLoopMapNode(Node):
             self.get_parameter("treat_unknown_as_occupied").value
         )
         self.map_timeout_sec = float(self.get_parameter("map_timeout").value)
+        self.shape = str(self.get_parameter("shape").value)
+        self.corner_radius = float(self.get_parameter("corner_radius").value)
+        self.segments_per_corner = int(self.get_parameter("segments_per_corner").value)
+        self.stop_lines_per_corner = int(self.get_parameter("stop_lines_per_corner").value)
 
         self.done = Event()
         self.exit_code = 0
@@ -99,6 +110,39 @@ class GenerateLoopMapNode(Node):
                 "OccupancyGrid origin is rotated; loop placement assumes an "
                 "axis-aligned grid and ignores the rotation."
             )
+        if self.shape == "rounded_rectangle":
+            osm, loop_file = occupancy_to_rounded_rect_osm(
+                list(msg.data),
+                width=info.width,
+                height=info.height,
+                resolution=info.resolution,
+                origin_x=info.origin.position.x,
+                origin_y=info.origin.position.y,
+                lane_width=self.lane_width,
+                wall_clearance=self.wall_clearance,
+                margin=self.margin,
+                corner_radius=self.corner_radius,
+                speed_limit=self.speed_limit,
+                segments_per_corner=self.segments_per_corner,
+                stop_lines_per_corner=self.stop_lines_per_corner,
+                occupied_threshold=self.occupied_threshold,
+                treat_unknown_as_occupied=self.treat_unknown_as_occupied,
+            )
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            (self.output_dir / "lanelet2_map.osm").write_text(osm)
+            (self.output_dir / "map_projector_info.yaml").write_text(MAP_PROJECTOR_INFO_YAML)
+            (self.output_dir / "loop_params.yaml").write_text(
+                rounded_rect_params_yaml(
+                    loop_file.rect, self.lane_width, self.speed_limit,
+                    loop_file.travel_direction,
+                )
+            )
+            self.get_logger().info(
+                f"Wrote rounded-rect loop map to {self.output_dir}: "
+                f"corner_radius={loop_file.rect.corner_radius:.3f} m, "
+                f"{len(loop_file.rect.stop_line_segments)} stop lines"
+            )
+            return
         osm, params = occupancy_to_loop_osm(
             list(msg.data),
             width=info.width,

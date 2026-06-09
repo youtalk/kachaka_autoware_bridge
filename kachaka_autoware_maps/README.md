@@ -133,3 +133,21 @@ ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
   launch_planning:=true launch_api:=true \
   map_path:=$HOME/maps/kachaka_loop
 ```
+
+### Rounded-rectangle loop (corners + stop lines)
+
+```bash
+ros2 launch kachaka_autoware_maps generate_loop_map.launch.xml \
+  output_dir:=$HOME/maps/kachaka_rect shape:=rounded_rectangle \
+  lane_width:=0.8 corner_radius:=0.45
+```
+
+`shape:=circle` (default) is unchanged — existing circle maps continue to work.
+
+The rounded-rectangle map adds one Autoware `stop_line` regulatory element per
+corner, consumed by the already-loaded `StopLineModulePlugin`; the robot makes a
+planner stop at each corner stop line, then turns the corner.
+
+Constraint: `corner_radius > lane_width/2`. The defaults (`corner_radius=0.7`,
+`lane_width=1.3`) satisfy this and produce a stadium-ish loop; `lane_width:=0.8
+corner_radius:=0.45` gives four crisp ~90-degree corners suitable for a tight room.

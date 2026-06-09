@@ -264,3 +264,97 @@ def test_should_refresh_ccw_direction() -> None:
     # CCW: goal 0.05 rad ahead (theta increases) -> within a 0.1 threshold.
     assert should_refresh_carrot(0.0, 0.05, COUNTERCLOCKWISE, refresh_angle_rad=0.1) is True
     assert should_refresh_carrot(0.0, 1.5, COUNTERCLOCKWISE, refresh_angle_rad=0.1) is False
+
+
+# ---------------------------------------------------------------------------
+# Task A4: direction-aware Centerline helpers
+# ---------------------------------------------------------------------------
+
+from kachaka_autoware_bridge.centerline import Centerline  # noqa: E402
+from kachaka_autoware_bridge.loop_route import (  # noqa: E402
+    centerline_carrot,
+    centerline_goal_behind,
+    centerline_progress,
+    centerline_remaining,
+)
+
+
+def _ccw_square():
+    return Centerline([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)])
+
+
+def test_centerline_carrot_is_ahead_in_travel_direction():
+    cl = _ccw_square()
+    g = centerline_carrot(cl, 0.0, -1.0, lead_len=1.0, travel_direction=COUNTERCLOCKWISE)
+    assert (g.x, g.y) == pytest.approx((1.0, -1.0))
+    g_cw = centerline_carrot(cl, 0.0, -1.0, lead_len=1.0, travel_direction=CLOCKWISE)
+    assert (g_cw.x, g_cw.y) == pytest.approx((-1.0, -1.0))
+
+
+def test_centerline_carrot_faces_travel_tangent_cw_is_reversed():
+    cl = _ccw_square()
+    ccw = centerline_carrot(cl, 0.0, -1.0, lead_len=0.5, travel_direction=COUNTERCLOCKWISE)
+    cw = centerline_carrot(cl, 0.0, -1.0, lead_len=0.5, travel_direction=CLOCKWISE)
+    assert _angdiff(ccw.yaw, cw.yaw) == pytest.approx(math.pi)
+
+
+def test_centerline_goal_behind_is_a_near_full_lap():
+    cl = _ccw_square()
+    g = centerline_goal_behind(cl, 0.0, -1.0, behind_len=0.5, travel_direction=COUNTERCLOCKWISE)
+    assert (g.x, g.y) == pytest.approx((-0.5, -1.0))
+
+
+def test_centerline_progress_forward_positive_each_direction():
+    cl = _ccw_square()
+    s_a, _ = cl.project(0.0, -1.0)
+    s_b, _ = cl.project(0.5, -1.0)
+    assert centerline_progress(s_a, s_b, cl.total_length, COUNTERCLOCKWISE) == pytest.approx(0.5)
+    assert centerline_progress(s_a, s_b, cl.total_length, CLOCKWISE) == pytest.approx(-0.5)
+
+
+def test_centerline_progress_wraps_across_seam():
+    cl = _ccw_square()
+    assert centerline_progress(7.5, 0.5, cl.total_length, COUNTERCLOCKWISE) == pytest.approx(1.0)
+
+
+def test_centerline_remaining_is_in_zero_total():
+    cl = _ccw_square()
+    r = centerline_remaining(1.0, 0.5, cl.total_length, COUNTERCLOCKWISE)
+    assert 0.0 <= r < cl.total_length
+    assert r == pytest.approx(cl.total_length - 0.5)
+
+
+def test_centerline_helpers_reject_unknown_direction():
+    cl = _ccw_square()
+    with pytest.raises(ValueError):
+        centerline_progress(0.0, 1.0, cl.total_length, "sideways")
+    with pytest.raises(ValueError):
+        centerline_carrot(cl, 0.0, -1.0, lead_len=1.0, travel_direction="")
+
+
+# ---------------------------------------------------------------------------
+# Task D1: centerline_from_loop_file
+# ---------------------------------------------------------------------------
+
+from kachaka_autoware_maps.loop_map_gen import (  # noqa: E402
+    LoopFile,
+    RoundedRectFile,
+)
+from kachaka_autoware_bridge.loop_route import centerline_from_loop_file  # noqa: E402
+
+
+def test_centerline_from_circle_loop_file():
+    lf = LoopFile(0.0, 0.0, 0.8, 1.3, 0.3, 16, CLOCKWISE)
+    cl = centerline_from_loop_file(lf)
+    _, err = cl.project(0.8, 0.0)
+    assert err == pytest.approx(0.0, abs=0.05)
+    assert cl.total_length == pytest.approx(2 * math.pi * 0.8, rel=0.02)
+
+
+def test_centerline_from_rounded_rect_loop_file():
+    rect = RoundedRectFile(0.0, 3.0, 0.0, 2.0, 0.5, 6, (3, 9))
+    lf = LoopFile(1.5, 1.0, 1.0, 0.8, 0.3, 0, COUNTERCLOCKWISE,
+                  shape="rounded_rectangle", rect=rect)
+    cl = centerline_from_loop_file(lf)
+    _, err = cl.project(1.5, 0.0)
+    assert err == pytest.approx(0.0, abs=1e-6)

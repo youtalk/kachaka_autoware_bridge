@@ -1,13 +1,16 @@
 # Copyright 2026 Yutaka Kondo
 # Licensed under the Apache License, Version 2.0 (the "License").
 
-"""Pure-geometry helpers for routing the robot around the circular loop.
+"""Pure-geometry helpers for routing the robot around a closed loop (circle or polyline).
 
 No ROS imports: unit-tested with plain pytest. scripts/set_loop_route reads the
 loop centre/radius/travel-direction (loop_params.yaml from kachaka_autoware_maps)
-and the robot's current pose, then uses these to (1) place the robot onto the
-loop facing the travel direction and (2) put an AD-API route goal just behind the
-robot so a route in the travel direction covers a near-complete lap.
+and the robot's current pose. Runtime consumers (run_endurance, set_loop_route)
+build a Centerline (centerline.py) from the loop params and route along its arc
+length; the circle helpers (ring_pose_at, carrot_goal, etc.) remain for the
+circle shape.
+
+The centerline_* family takes a Centerline object (see centerline.py) and works for any closed polyline.
 
 Travel direction matters: ``autoware_route_handler`` rejects a start lanelet
 whose centerline direction differs from the ego heading by more than 90 deg
@@ -22,34 +25,21 @@ route!". The earlier counter-clockwise assumption produced an anti-parallel
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+
+from kachaka_autoware_bridge.centerline import (  # re-exported for callers/tests
+    Centerline,
+    GoalPose,
+    _normalize_angle,
+)
 
 CLOCKWISE = "clockwise"
 COUNTERCLOCKWISE = "counterclockwise"
 TRAVEL_DIRECTIONS = (CLOCKWISE, COUNTERCLOCKWISE)
 
 
-@dataclass(frozen=True)
-class GoalPose:
-    """Planar pose: map-frame position and heading (rad)."""
-
-    x: float
-    y: float
-    yaw: float
-
-
-def _normalize_angle(a: float) -> float:
-    """Wrap an angle to [-pi, pi].
-
-    The exact boundary behaviour is float-dependent: atan2(sin(-pi), cos(-pi))
-    returns -pi because sin(-pi) is a small negative float rather than exact 0.
-    """
-    return math.atan2(math.sin(a), math.cos(a))
-
-
 def _direction_sign(travel_direction: str) -> float:
-    """+1 if theta increases along travel (counter-clockwise), -1 if it decreases
-    (clockwise). Raises ValueError on an unknown direction."""
+    """+1 when travel runs along the stored (counter-clockwise) order,
+    -1 when reversed (clockwise). Raises ValueError on an unknown direction."""
     if travel_direction == COUNTERCLOCKWISE:
         return 1.0
     if travel_direction == CLOCKWISE:
@@ -220,3 +210,97 @@ def should_refresh_carrot(
     with a fresh one further along (so the robot never actually arrives).
     Raises ValueError on an unknown travel_direction."""
     return remaining_arc(robot_theta, goal_theta, travel_direction) <= refresh_angle_rad
+
+
+def centerline_carrot(
+    centerline: Centerline,
+    robot_x: float,
+    robot_y: float,
+    lead_len: float,
+    travel_direction: str = CLOCKWISE,
+) -> GoalPose:
+    """A goal ``lead_len`` metres AHEAD of the robot's projection along travel,
+    on the centerline, facing the travel tangent (the receding-horizon carrot).
+    Raises ValueError if lead_len <= 0 or travel_direction is unknown."""
+    if lead_len <= 0.0:
+        raise ValueError(f"lead_len must be > 0, got {lead_len}")
+    sign = _direction_sign(travel_direction)
+    s_robot, _ = centerline.project(robot_x, robot_y)
+    return _facing_pose(centerline, centerline.advance(s_robot, sign * lead_len), sign)
+
+
+def centerline_goal_behind(
+    centerline: Centerline,
+    robot_x: float,
+    robot_y: float,
+    behind_len: float,
+    travel_direction: str = CLOCKWISE,
+) -> GoalPose:
+    """A goal ``behind_len`` metres BEHIND the robot along travel, so routing
+    forward spans ~(total - behind_len) ≈ one lap. Raises ValueError likewise."""
+    if behind_len <= 0.0:
+        raise ValueError(f"behind_len must be > 0, got {behind_len}")
+    sign = _direction_sign(travel_direction)
+    s_robot, _ = centerline.project(robot_x, robot_y)
+    return _facing_pose(centerline, centerline.advance(s_robot, -sign * behind_len), sign)
+
+
+def _facing_pose(centerline: Centerline, s: float, sign: float) -> GoalPose:
+    """Pose at arc length ``s`` facing the TRAVEL tangent (the stored forward
+    tangent when sign>0, reversed when sign<0)."""
+    p = centerline.pose_at(s)
+    yaw = p.yaw if sign > 0 else _normalize_angle(p.yaw + math.pi)
+    return GoalPose(x=p.x, y=p.y, yaw=yaw)
+
+
+def centerline_progress(
+    prev_s: float, curr_s: float, total_length: float, travel_direction: str
+) -> float:
+    """Forward arc length (m) travelled prev_s -> curr_s along travel, shortest
+    signed step (wrap-safe). Positive = forward; a tie at exactly half the loop
+    resolves as forward. Raises on unknown direction."""
+    sign = _direction_sign(travel_direction)
+    d = (curr_s - prev_s) % total_length
+    if d > total_length / 2.0:
+        d -= total_length
+    return sign * d
+
+
+def centerline_remaining(
+    robot_s: float, goal_s: float, total_length: float, travel_direction: str
+) -> float:
+    """Forward arc length (m) in [0, total) the robot must still travel to reach
+    ``goal_s`` along travel. Raises on unknown direction."""
+    sign = _direction_sign(travel_direction)
+    if sign > 0:
+        return (goal_s - robot_s) % total_length
+    return (robot_s - goal_s) % total_length
+
+
+def centerline_from_loop_file(loop_file) -> Centerline:
+    """Build the runtime Centerline from a parsed loop_params.yaml (LoopFile).
+
+    circle -> a num_segments-gon; rounded_rectangle -> straights + corner arcs.
+    Imported lazily so the pure-geometry module has no hard maps dependency at
+    import time."""
+    from kachaka_autoware_maps.loop_map_gen import (
+        circle_centerline_vertices,
+        rounded_rect_centerline_vertices,
+    )
+
+    if loop_file.shape == "rounded_rectangle":
+        r = loop_file.rect
+        if r is None:
+            raise ValueError("rounded_rectangle loop_file has no rect geometry")
+        return Centerline(
+            rounded_rect_centerline_vertices(
+                r.x_min, r.x_max, r.y_min, r.y_max, r.corner_radius,
+                r.segments_per_corner,
+            )
+        )
+    segments = loop_file.num_segments if loop_file.num_segments >= 3 else 720
+    return Centerline(
+        circle_centerline_vertices(
+            loop_file.center_x, loop_file.center_y, loop_file.radius, segments
+        )
+    )

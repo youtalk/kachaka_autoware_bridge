@@ -185,73 +185,74 @@ _OSM_HEADER = (
 _OSM_FOOTER = "</osm>\n"
 
 
-def generate_circle_loop_osm(
-    center_x: float,
-    center_y: float,
-    radius: float,
+def _node_xml(nid: int, x: float, y: float) -> str:
+    return (
+        f'  <node id="{nid}" lat="0.0" lon="0.0">'
+        f'<tag k="local_x" v="{x:.6f}"/>'
+        f'<tag k="local_y" v="{y:.6f}"/>'
+        f'<tag k="ele" v="0.0"/></node>'
+    )
+
+
+def _vertex_normals(vertices: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Unit normal at each vertex (mean of adjacent segment normals). For a
+    regular polygon this is the radial direction, so the circle bounds match the
+    old generator exactly."""
+    n = len(vertices)
+    seg_norm = []
+    for i in range(n):
+        x0, y0 = vertices[i]
+        x1, y1 = vertices[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy) or 1.0
+        seg_norm.append((-dy / length, dx / length))
+    normals = []
+    for i in range(n):
+        nx = seg_norm[i - 1][0] + seg_norm[i][0]
+        ny = seg_norm[i - 1][1] + seg_norm[i][1]
+        length = math.hypot(nx, ny) or 1.0
+        normals.append((nx / length, ny / length))
+    return normals
+
+
+def generate_loop_osm(
+    vertices: list[tuple[float, float]],
     lane_width: float,
     speed_limit: float,
-    num_segments: int,
 ) -> str:
-    """Return a lanelet2 OSM document for one circular counter-clockwise loop.
+    """lanelet2 OSM for a one-way loop along ``vertices`` (implicitly closed).
 
-    The centerline is a circle of `radius` m about (center_x, center_y) in the
-    map frame (Local projector: node local_x/local_y are map-frame metres). The
-    circle is split into `num_segments` arcs; each arc is one lanelet whose left
-    bound is the inner circle (radius - lane_width/2) and right bound the outer
-    circle (radius + lane_width/2) — correct for counter-clockwise travel.
-    Consecutive arcs SHARE their cross-section node ids and the last arc reuses
-    arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
-
-    `speed_limit` is in **m/s** (the generator's natural input unit). It is
-    converted to **km/h** before being written to the OSM ``speed_limit`` tag,
-    per the lanelet2 / Autoware convention (Autoware sample maps use km/h).
-
-    Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
-    radius would be non-positive), or if lane_width/speed_limit are non-positive.
+    One lanelet per segment; left bound = centerline + normal*lane_width/2, right
+    bound = centerline - normal*lane_width/2; consecutive segments share their
+    cross-section node ids and the last reuses segment 0's, so the routing graph
+    is a closed cycle. ``speed_limit`` is m/s, written to the OSM tag in km/h.
+    Raises ValueError on < 3 vertices or non-positive lane_width/speed_limit.
     """
-    if num_segments < 3:
-        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    n = len(vertices)
+    if n < 3:
+        raise ValueError(f"need >= 3 vertices, got {n}")
     if lane_width <= 0.0:
         raise ValueError(f"lane_width must be > 0, got {lane_width}")
     if speed_limit <= 0.0:
         raise ValueError(f"speed_limit must be > 0, got {speed_limit}")
-    inner = radius - lane_width / 2.0
-    outer = radius + lane_width / 2.0
-    if inner <= 0.0:
-        raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
-
-    # lanelet2 speed_limit tag is in km/h; convert from the m/s input.
+    half = lane_width / 2.0
+    normals = _vertex_normals(vertices)
     speed_limit_kmh = speed_limit * 3.6
 
-    # Node ids: inner (left) 1..N at cross-sections 0..N-1; outer (right) N+1..2N.
-    left_ids: list[int] = []
-    right_ids: list[int] = []
-    node_xml: list[str] = []
-    for i in range(num_segments):
-        theta = 2.0 * math.pi * i / num_segments
-        cos_t, sin_t = math.cos(theta), math.sin(theta)
-        left_id = i + 1
-        right_id = num_segments + i + 1
+    left_ids, right_ids, node_xml = [], [], []
+    for i in range(n):
+        cx, cy = vertices[i]
+        nx, ny = normals[i]
+        left_id, right_id = i + 1, n + i + 1
         left_ids.append(left_id)
         right_ids.append(right_id)
-        for nid, rad in ((left_id, inner), (right_id, outer)):
-            x = center_x + rad * cos_t
-            y = center_y + rad * sin_t
-            node_xml.append(
-                f'  <node id="{nid}" lat="0.0" lon="0.0">'
-                f'<tag k="local_x" v="{x:.6f}"/>'
-                f'<tag k="local_y" v="{y:.6f}"/>'
-                f'<tag k="ele" v="0.0"/></node>'
-            )
+        node_xml.append(_node_xml(left_id, cx + half * nx, cy + half * ny))
+        node_xml.append(_node_xml(right_id, cx - half * nx, cy - half * ny))
 
-    way_xml: list[str] = []
-    relation_xml: list[str] = []
-    for i in range(num_segments):
-        j = (i + 1) % num_segments
-        left_way = 2 * num_segments + i + 1
-        right_way = 3 * num_segments + i + 1
-        lanelet = 4 * num_segments + i + 1
+    way_xml, relation_xml = [], []
+    for i in range(n):
+        j = (i + 1) % n
+        left_way, right_way, lanelet = 2 * n + i + 1, 3 * n + i + 1, 4 * n + i + 1
         way_xml.append(
             f'  <way id="{left_way}"><nd ref="{left_ids[i]}"/><nd ref="{left_ids[j]}"/>'
             f'<tag k="type" v="line_thin"/><tag k="subtype" v="solid"/></way>'
@@ -273,15 +274,58 @@ def generate_circle_loop_osm(
         )
 
     return (
-        _OSM_HEADER
-        + "\n".join(node_xml)
-        + "\n"
-        + "\n".join(way_xml)
-        + "\n"
-        + "\n".join(relation_xml)
-        + "\n"
-        + _OSM_FOOTER
+        _OSM_HEADER + "\n".join(node_xml) + "\n" + "\n".join(way_xml) + "\n"
+        + "\n".join(relation_xml) + "\n" + _OSM_FOOTER
     )
+
+
+def generate_circle_loop_osm(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    lane_width: float,
+    speed_limit: float,
+    num_segments: int,
+) -> str:
+    """Circular one-way loop OSM (kept for the circle shape + existing callers).
+    Delegates to generate_loop_osm over a regular-polygon centerline.
+
+    The centerline is a circle of `radius` m about (center_x, center_y) in the
+    map frame (Local projector: node local_x/local_y are map-frame metres). The
+    circle is split into `num_segments` arcs; each arc is one lanelet whose left
+    bound is the inner circle (radius - lane_width/2) and right bound the outer
+    circle (radius + lane_width/2) — correct for counter-clockwise travel.
+    Consecutive arcs SHARE their cross-section node ids and the last arc reuses
+    arc 0's nodes, so the lanelet2 routing graph forms a closed cycle.
+
+    `speed_limit` is in **m/s** (the generator's natural input unit). It is
+    converted to **km/h** before being written to the OSM ``speed_limit`` tag,
+    per the lanelet2 / Autoware convention (Autoware sample maps use km/h).
+
+    Raises ValueError if num_segments < 3, if radius <= lane_width/2 (inner
+    radius would be non-positive), or if lane_width/speed_limit are non-positive.
+    """
+    if num_segments < 3:
+        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    if radius - lane_width / 2.0 <= 0.0:
+        raise ValueError(f"radius ({radius}) must be > lane_width/2 ({lane_width / 2.0})")
+    return generate_loop_osm(
+        circle_centerline_vertices(center_x, center_y, radius, num_segments),
+        lane_width, speed_limit,
+    )
+
+
+@dataclass(frozen=True)
+class RoundedRectFile:
+    """Rounded-rectangle centerline geometry stored in loop_params.yaml."""
+
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    corner_radius: float
+    segments_per_corner: int
+    stop_line_segments: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -295,6 +339,8 @@ class LoopFile:
     speed_limit: float
     num_segments: int
     travel_direction: str
+    shape: str = "circle"
+    rect: "RoundedRectFile | None" = None
 
 
 def loop_params_yaml(
@@ -321,15 +367,53 @@ def loop_params_yaml(
     )
 
 
-def parse_loop_params(text: str) -> "LoopFile":
-    """Parse loop_params.yaml text into a LoopFile (inverse of loop_params_yaml).
+def rounded_rect_params_yaml(
+    rect: "RoundedRectFile", lane_width: float, speed_limit: float,
+    travel_direction: str = LOADED_TRAVEL_DIRECTION,
+) -> str:
+    """Sidecar for a rounded-rectangle loop. Circle fields are written as the
+    rectangle centre + the inscribed circle radius for schema stability; the
+    authoritative geometry is in the rect_* fields and shape=rounded_rectangle.
+    The written ``radius`` is the inscribed half-shorter-side, NOT the corner arc
+    radius (that is ``corner_radius``)."""
+    cx = (rect.x_min + rect.x_max) / 2.0
+    cy = (rect.y_min + rect.y_max) / 2.0
+    r = min(rect.x_max - rect.x_min, rect.y_max - rect.y_min) / 2.0
+    seg = ",".join(str(s) for s in rect.stop_line_segments)
+    return (
+        f"shape: rounded_rectangle\n"
+        f"center_x: {cx}\ncenter_y: {cy}\nradius: {r}\n"
+        f"lane_width: {lane_width}\nspeed_limit: {speed_limit}\n"
+        f"num_segments: 0\n"
+        f"travel_direction: {travel_direction}\n"
+        f"rect_x_min: {rect.x_min}\nrect_x_max: {rect.x_max}\n"
+        f"rect_y_min: {rect.y_min}\nrect_y_max: {rect.y_max}\n"
+        f"corner_radius: {rect.corner_radius}\n"
+        f"segments_per_corner: {rect.segments_per_corner}\n"
+        f"stop_line_segments: \"{seg}\"\n"
+    )
 
-    Shared loader so every consumer reads the same schema and it can't drift. A
-    file written before travel_direction existed defaults to
-    LOADED_TRAVEL_DIRECTION. Raises KeyError on a missing required field and
-    ValueError on a non-numeric value.
+
+def parse_loop_params(text: str) -> "LoopFile":
+    """Parse loop_params.yaml text into a LoopFile (inverse of the *_yaml writers).
+
+    Old circle files (no ``shape`` field) parse as shape='circle'. A
+    rounded_rectangle file additionally carries rect_* geometry. Raises KeyError
+    on a missing required field and ValueError on a non-numeric value.
     """
     data = yaml.safe_load(text) or {}
+    shape = str(data.get("shape", "circle"))
+    rect = None
+    if shape == "rounded_rectangle":
+        seg_raw = str(data.get("stop_line_segments", "")).strip()
+        segs = tuple(int(s) for s in seg_raw.split(",") if s != "")
+        rect = RoundedRectFile(
+            x_min=float(data["rect_x_min"]), x_max=float(data["rect_x_max"]),
+            y_min=float(data["rect_y_min"]), y_max=float(data["rect_y_max"]),
+            corner_radius=float(data["corner_radius"]),
+            segments_per_corner=int(data["segments_per_corner"]),
+            stop_line_segments=segs,
+        )
     return LoopFile(
         center_x=float(data["center_x"]),
         center_y=float(data["center_y"]),
@@ -338,7 +422,90 @@ def parse_loop_params(text: str) -> "LoopFile":
         speed_limit=float(data["speed_limit"]),
         num_segments=int(data["num_segments"]),
         travel_direction=str(data.get("travel_direction", LOADED_TRAVEL_DIRECTION)),
+        shape=shape,
+        rect=rect,
     )
+
+
+def circle_centerline_vertices(
+    center_x: float, center_y: float, radius: float, num_segments: int
+) -> list[tuple[float, float]]:
+    """Vertices of a regular ``num_segments``-gon on the circle (CCW order)."""
+    if num_segments < 3:
+        raise ValueError(f"num_segments must be >= 3, got {num_segments}")
+    if radius <= 0.0:
+        raise ValueError(f"radius must be > 0, got {radius}")
+    return [
+        (center_x + radius * math.cos(2.0 * math.pi * i / num_segments),
+         center_y + radius * math.sin(2.0 * math.pi * i / num_segments))
+        for i in range(num_segments)
+    ]
+
+
+def rounded_rect_centerline_vertices(
+    x_min: float, x_max: float, y_min: float, y_max: float,
+    corner_radius: float, segments_per_corner: int = 6,
+) -> list[tuple[float, float]]:
+    """Vertices of a rounded-rectangle centerline (CCW), straights joined by four
+    quarter-circle corners of ``corner_radius``. Raises ValueError if the radius
+    does not fit the rectangle (> half the shorter side) or is non-positive.
+
+    Each corner arc is sampled with ``segments_per_corner + 1`` points (including
+    both endpoints). The straight run between consecutive corners is represented by
+    one additional midpoint (at the midpoint of the run) if the run has nonzero
+    length, ensuring axis-aligned straight runs have vertices on them. Duplicate
+    points are removed after assembly so shared endpoints are not repeated.
+    """
+    if corner_radius <= 0.0:
+        raise ValueError(f"corner_radius must be > 0, got {corner_radius}")
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(f"degenerate rectangle {w} x {h}")
+    if corner_radius > min(w, h) / 2.0 + 1e-9:
+        raise ValueError(
+            f"corner_radius {corner_radius} exceeds half the shorter side "
+            f"{min(w, h) / 2.0}"
+        )
+    r = corner_radius
+    # Each entry: (corner_center_x, corner_center_y, arc_start_angle_radians).
+    # Arc sweeps CCW (increasing angle) by π/2. Traversal: bottom-right corner
+    # (270°→360°), top-right (0°→90°), top-left (90°→180°), bottom-left (180°→270°).
+    corners = [
+        (x_max - r, y_min + r, 1.5 * math.pi),   # bottom-right: 270°→360°
+        (x_max - r, y_max - r, 0.0),              # top-right:    0°→90°
+        (x_min + r, y_max - r, 0.5 * math.pi),   # top-left:     90°→180°
+        (x_min + r, y_min + r, math.pi),          # bottom-left:  180°→270°
+    ]
+    # Pre-compute the arc endpoint that each corner ENDS on (= start of next straight).
+    corner_ends: list[tuple[float, float]] = []
+    for cx, cy, a0 in corners:
+        a_end = a0 + math.pi / 2.0
+        corner_ends.append((cx + r * math.cos(a_end), cy + r * math.sin(a_end)))
+
+    verts: list[tuple[float, float]] = []
+    n = len(corners)
+    for i in range(n):
+        cx, cy, a0 = corners[i]
+        # Emit corner arc (segments_per_corner+1 points including both endpoints).
+        for k in range(segments_per_corner + 1):
+            a = a0 + (math.pi / 2.0) * k / segments_per_corner
+            verts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        # Emit the midpoint of the straight run to the next corner's start.
+        run_start = corner_ends[i]
+        # Next corner starts at: (cx_next + r*cos(a0_next), cy_next + r*sin(a0_next))
+        cx_next, cy_next, a0_next = corners[(i + 1) % n]
+        run_end = (cx_next + r * math.cos(a0_next), cy_next + r * math.sin(a0_next))
+        mid = ((run_start[0] + run_end[0]) / 2.0, (run_start[1] + run_end[1]) / 2.0)
+        if math.hypot(run_end[0] - run_start[0], run_end[1] - run_start[1]) > 1e-9:
+            verts.append(mid)
+
+    deduped: list[tuple[float, float]] = []
+    for v in verts:
+        if not deduped or math.hypot(v[0] - deduped[-1][0], v[1] - deduped[-1][1]) > 1e-9:
+            deduped.append(v)
+    if math.hypot(deduped[0][0] - deduped[-1][0], deduped[0][1] - deduped[-1][1]) <= 1e-9:
+        deduped.pop()
+    return deduped
 
 
 def occupancy_to_loop_osm(
@@ -376,3 +543,195 @@ def occupancy_to_loop_osm(
         lane_width, speed_limit, num_segments,
     )
     return osm, params
+
+
+@dataclass(frozen=True)
+class StopLineSpec:
+    """A stop line to emit at the START vertex of lanelet ``segment_index``."""
+
+    segment_index: int
+
+
+def generate_loop_osm_with_stop_lines(
+    vertices: list[tuple[float, float]],
+    lane_width: float,
+    speed_limit: float,
+    stop_lines: "list[StopLineSpec] | None" = None,
+) -> str:
+    """generate_loop_osm + Autoware stop-line regulatory geometry.
+
+    Each StopLineSpec emits: a ``type=stop_line`` way across the lane at the
+    segment's start vertex; a small ``type=traffic_sign, subtype=stop_sign``
+    refers way beside the lane; a ``type=regulatory_element, subtype=traffic_sign``
+    relation with ref_line=stop_line + refers=sign; and a ``regulatory_element``
+    member added to that segment's lanelet. This is exactly what
+    autoware_behavior_velocity_stop_line_module consumes. Raises ValueError on an
+    out-of-range segment_index.
+    """
+    base = generate_loop_osm(vertices, lane_width, speed_limit)
+    if not stop_lines:  # None or empty -> no stop-line geometry to add
+        return base
+    n = len(vertices)
+    normals = _vertex_normals(vertices)
+    half = lane_width / 2.0
+    nid = 100 * n + 1
+    extra_nodes, extra_ways, extra_rels = [], [], []
+    lanelet_regelem_members: dict[int, list[int]] = {}
+
+    for spec in stop_lines:
+        if not (0 <= spec.segment_index < n):
+            raise ValueError(f"segment_index {spec.segment_index} out of range [0,{n})")
+        cx, cy = vertices[spec.segment_index]
+        nx, ny = normals[spec.segment_index]
+        a_id, b_id = nid, nid + 1
+        extra_nodes.append(_node_xml(a_id, cx + half * nx, cy + half * ny))
+        extra_nodes.append(_node_xml(b_id, cx - half * nx, cy - half * ny))
+        stop_way = nid + 2
+        extra_ways.append(
+            f'  <way id="{stop_way}"><nd ref="{a_id}"/><nd ref="{b_id}"/>'
+            f'<tag k="type" v="stop_line"/></way>'
+        )
+        s_id, t_id = nid + 3, nid + 4
+        ox, oy = cx + (half + 0.1) * nx, cy + (half + 0.1) * ny
+        extra_nodes.append(_node_xml(s_id, ox - 0.05 * ny, oy + 0.05 * nx))
+        extra_nodes.append(_node_xml(t_id, ox + 0.05 * ny, oy - 0.05 * nx))
+        sign_way = nid + 5
+        extra_ways.append(
+            f'  <way id="{sign_way}"><nd ref="{s_id}"/><nd ref="{t_id}"/>'
+            f'<tag k="type" v="traffic_sign"/><tag k="subtype" v="stop_sign"/></way>'
+        )
+        regelem = nid + 6
+        extra_rels.append(
+            f'  <relation id="{regelem}">\n'
+            f'    <member type="way" ref="{stop_way}" role="ref_line"/>\n'
+            f'    <member type="way" ref="{sign_way}" role="refers"/>\n'
+            f'    <tag k="type" v="regulatory_element"/>\n'
+            f'    <tag k="subtype" v="traffic_sign"/>\n'
+            f"  </relation>"
+        )
+        lanelet_id = 4 * n + spec.segment_index + 1
+        lanelet_regelem_members.setdefault(lanelet_id, []).append(regelem)
+        nid += 10
+
+    out = base.replace(_OSM_FOOTER, "")
+    out += "\n".join(extra_nodes) + "\n" + "\n".join(extra_ways) + "\n" + "\n".join(extra_rels) + "\n"
+    for lanelet_id, regelems in lanelet_regelem_members.items():
+        members = "".join(
+            f'    <member type="relation" ref="{re}" role="regulatory_element"/>\n'
+            for re in regelems
+        )
+        anchor = f'  <relation id="{lanelet_id}">\n'
+        out = out.replace(anchor, anchor + members, 1)
+    return out + _OSM_FOOTER
+
+
+def rect_to_rounded_rect_params(
+    rect: "FreeRectangle", resolution: float, origin_x: float, origin_y: float,
+    wall_clearance: float, margin: float, lane_width: float, corner_radius_request: float,
+) -> "RoundedRectFile":
+    """Map a free-cell rectangle to a rounded-rectangle centerline (map frame).
+
+    The centerline rectangle is the free rectangle inset by wall_clearance+margin
+    on every side (the physical room the robot needs; the drawn lane may overhang
+    the virtual walls). ``corner_radius`` is the requested value clamped to half
+    the shorter centerline side, and must exceed lane_width/2 so the inner drawn
+    bound stays valid (else ValueError -- widen the radius or narrow the lane).
+    """
+    if resolution <= 0.0:
+        raise ValueError(f"resolution must be > 0, got {resolution}")
+    if wall_clearance <= 0.0:
+        raise ValueError(f"wall_clearance must be > 0, got {wall_clearance}")
+    inset = wall_clearance + margin
+    x_min = origin_x + rect.col0 * resolution + inset
+    x_max = origin_x + (rect.col0 + rect.cols) * resolution - inset
+    y_min = origin_y + rect.row0 * resolution + inset
+    y_max = origin_y + (rect.row0 + rect.rows) * resolution - inset
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(
+            f"free rectangle too small after inset {inset}: {w:.2f} x {h:.2f} m"
+        )
+    # Leave a minimum straight run so _corner_entry_segments can always detect the
+    # four straight->arc transitions (a corner_radius at exactly min(w,h)/2 leaves
+    # zero straight and the corner entries become undetectable).
+    _MIN_STRAIGHT_M = 0.05
+    corner_radius = min(corner_radius_request, min(w, h) / 2.0 - _MIN_STRAIGHT_M)
+    if corner_radius <= lane_width / 2.0:
+        raise ValueError(
+            f"corner_radius {corner_radius:.3f} must exceed lane_width/2 "
+            f"{lane_width / 2.0:.3f} (inner bound would fold); widen the radius "
+            "or narrow the lane"
+        )
+    return RoundedRectFile(
+        x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
+        corner_radius=corner_radius, segments_per_corner=0, stop_line_segments=(),
+    )
+
+
+def _corner_entry_segments(
+    vertices: list[tuple[float, float]], rr: "RoundedRectFile", count_per_corner: int
+) -> list[int]:
+    """Segment indices on the straight just before each corner arc (the stop
+    points). A vertex starts a corner arc when its distance to the nearest corner
+    centre is ~corner_radius AND the previous vertex was on a straight; we take
+    the index just before each such transition."""
+    centres = [
+        (rr.x_min + rr.corner_radius, rr.y_min + rr.corner_radius),
+        (rr.x_max - rr.corner_radius, rr.y_min + rr.corner_radius),
+        (rr.x_max - rr.corner_radius, rr.y_max - rr.corner_radius),
+        (rr.x_min + rr.corner_radius, rr.y_max - rr.corner_radius),
+    ]
+    n = len(vertices)
+
+    def on_arc(i: int) -> bool:
+        x, y = vertices[i]
+        return any(
+            abs(math.hypot(x - cx, y - cy) - rr.corner_radius) < 1e-6 for cx, cy in centres
+        )
+
+    entries = []
+    for i in range(n):
+        if on_arc(i) and not on_arc((i - 1) % n):
+            entries.append((i - 1) % n)
+    if len(entries) != 4:
+        raise RuntimeError(
+            f"expected 4 corner arc-entry transitions, found {len(entries)}; "
+            "corner_radius may be too close to half the shorter centerline side"
+        )
+    return entries[: 4 * count_per_corner]
+
+
+def occupancy_to_rounded_rect_osm(
+    data: list[int], width: int, height: int, resolution: float,
+    origin_x: float, origin_y: float, *,
+    lane_width: float, wall_clearance: float, margin: float, corner_radius: float,
+    speed_limit: float, segments_per_corner: int, stop_lines_per_corner: int = 1,
+    occupied_threshold: int = 50, treat_unknown_as_occupied: bool = True,
+) -> "tuple[str, LoopFile]":
+    """Find the largest free rectangle, fit a rounded-rectangle loop with stop
+    lines at the corner approaches, and return (osm, LoopFile). Each corner gets
+    ``stop_lines_per_corner`` stop line(s) on the straight just before its entry."""
+    if stop_lines_per_corner != 1:
+        raise ValueError(
+            f"stop_lines_per_corner must be 1 (only one stop line per corner is "
+            f"supported), got {stop_lines_per_corner}"
+        )
+    rect = largest_free_rectangle(data, width, height, occupied_threshold, treat_unknown_as_occupied)
+    rr = rect_to_rounded_rect_params(
+        rect, resolution, origin_x, origin_y, wall_clearance, margin, lane_width, corner_radius
+    )
+    verts = rounded_rect_centerline_vertices(
+        rr.x_min, rr.x_max, rr.y_min, rr.y_max, rr.corner_radius, segments_per_corner
+    )
+    stop_segments = _corner_entry_segments(verts, rr, count_per_corner=stop_lines_per_corner)
+    rr = RoundedRectFile(
+        rr.x_min, rr.x_max, rr.y_min, rr.y_max, rr.corner_radius,
+        segments_per_corner, tuple(stop_segments),
+    )
+    osm = generate_loop_osm_with_stop_lines(
+        verts, lane_width, speed_limit,
+        stop_lines=[StopLineSpec(s) for s in stop_segments],
+    )
+    text = rounded_rect_params_yaml(rr, lane_width, speed_limit)
+    loop_file = parse_loop_params(text)
+    return osm, loop_file
