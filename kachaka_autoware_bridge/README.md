@@ -110,3 +110,9 @@ lap"), robot off-dock, packages built and `source install/setup.zsh`.
 Safety: the vehicle interface forwards velocity **only while AUTONOMOUS** and
 has a zero-Twist watchdog; Kachaka also has a built-in front-obstacle stop, so an
 orchestrator crash cannot drive the robot.
+
+The harness is shape-agnostic: point `map_path` at a rounded-rectangle map (see
+`kachaka_autoware_maps` README) to exercise planner stops and left/right turns.
+At each corner the robot stops at the stop line (`behavior_velocity
+StopLineModulePlugin`), then turns; the circle map works unchanged.  The session
+record JSON written to `~/endurance_runs/` includes the planner `stop_count`.
