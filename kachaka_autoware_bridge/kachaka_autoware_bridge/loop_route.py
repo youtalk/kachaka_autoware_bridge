@@ -22,29 +22,16 @@ route!". The earlier counter-clockwise assumption produced an anti-parallel
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+
+from kachaka_autoware_bridge.centerline import (  # re-exported for callers/tests
+    Centerline,
+    GoalPose,
+    _normalize_angle,
+)
 
 CLOCKWISE = "clockwise"
 COUNTERCLOCKWISE = "counterclockwise"
 TRAVEL_DIRECTIONS = (CLOCKWISE, COUNTERCLOCKWISE)
-
-
-@dataclass(frozen=True)
-class GoalPose:
-    """Planar pose: map-frame position and heading (rad)."""
-
-    x: float
-    y: float
-    yaw: float
-
-
-def _normalize_angle(a: float) -> float:
-    """Wrap an angle to [-pi, pi].
-
-    The exact boundary behaviour is float-dependent: atan2(sin(-pi), cos(-pi))
-    returns -pi because sin(-pi) is a small negative float rather than exact 0.
-    """
-    return math.atan2(math.sin(a), math.cos(a))
 
 
 def _direction_sign(travel_direction: str) -> float:
@@ -220,3 +207,67 @@ def should_refresh_carrot(
     with a fresh one further along (so the robot never actually arrives).
     Raises ValueError on an unknown travel_direction."""
     return remaining_arc(robot_theta, goal_theta, travel_direction) <= refresh_angle_rad
+
+
+def centerline_carrot(
+    centerline: Centerline,
+    robot_x: float,
+    robot_y: float,
+    lead_len: float,
+    travel_direction: str = CLOCKWISE,
+) -> GoalPose:
+    """A goal ``lead_len`` metres AHEAD of the robot's projection along travel,
+    on the centerline, facing the travel tangent (the receding-horizon carrot).
+    Raises ValueError if lead_len <= 0 or travel_direction is unknown."""
+    if lead_len <= 0.0:
+        raise ValueError(f"lead_len must be > 0, got {lead_len}")
+    sign = _direction_sign(travel_direction)
+    s_robot, _ = centerline.project(robot_x, robot_y)
+    return _facing_pose(centerline, centerline.advance(s_robot, sign * lead_len), sign)
+
+
+def centerline_goal_behind(
+    centerline: Centerline,
+    robot_x: float,
+    robot_y: float,
+    behind_len: float,
+    travel_direction: str = CLOCKWISE,
+) -> GoalPose:
+    """A goal ``behind_len`` metres BEHIND the robot along travel, so routing
+    forward spans ~(total - behind_len) ≈ one lap. Raises ValueError likewise."""
+    if behind_len <= 0.0:
+        raise ValueError(f"behind_len must be > 0, got {behind_len}")
+    sign = _direction_sign(travel_direction)
+    s_robot, _ = centerline.project(robot_x, robot_y)
+    return _facing_pose(centerline, centerline.advance(s_robot, -sign * behind_len), sign)
+
+
+def _facing_pose(centerline: Centerline, s: float, sign: float) -> GoalPose:
+    """Pose at arc length ``s`` facing the TRAVEL tangent (the stored forward
+    tangent when sign>0, reversed when sign<0)."""
+    p = centerline.pose_at(s)
+    yaw = p.yaw if sign > 0 else _normalize_angle(p.yaw + math.pi)
+    return GoalPose(x=p.x, y=p.y, yaw=yaw)
+
+
+def centerline_progress(
+    prev_s: float, curr_s: float, total_length: float, travel_direction: str
+) -> float:
+    """Forward arc length (m) travelled prev_s -> curr_s along travel, shortest
+    signed step (wrap-safe). Positive = forward. Raises on unknown direction."""
+    sign = _direction_sign(travel_direction)
+    d = (curr_s - prev_s) % total_length
+    if d > total_length / 2.0:
+        d -= total_length
+    return sign * d
+
+
+def centerline_remaining(
+    robot_s: float, goal_s: float, total_length: float, travel_direction: str
+) -> float:
+    """Forward arc length (m) in [0, total) the robot must still travel to reach
+    ``goal_s`` along travel. Raises on unknown direction."""
+    sign = _direction_sign(travel_direction)
+    if sign > 0:
+        return (goal_s - robot_s) % total_length
+    return (robot_s - goal_s) % total_length
