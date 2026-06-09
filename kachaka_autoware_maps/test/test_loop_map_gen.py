@@ -514,3 +514,11 @@ def test_stop_line_regelem_attached_to_lanelet_via_lanelet2():
         os.unlink(h.name)
     with_regelem = [ll for ll in m.laneletLayer if len(ll.regulatoryElements) > 0]
     assert len(with_regelem) >= len(specs)
+
+
+def test_stop_line_out_of_range_segment_raises():
+    verts = rounded_rect_centerline_vertices(0.0, 4.0, 0.0, 4.0, corner_radius=1.0,
+                                             segments_per_corner=4)
+    with pytest.raises(ValueError):
+        generate_loop_osm_with_stop_lines(verts, lane_width=0.8, speed_limit=0.3,
+                                          stop_lines=[StopLineSpec(segment_index=len(verts))])

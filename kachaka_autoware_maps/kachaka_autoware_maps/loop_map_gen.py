@@ -441,7 +441,7 @@ def rounded_rect_centerline_vertices(
         cx_next, cy_next, a0_next = corners[(i + 1) % n]
         run_end = (cx_next + r * math.cos(a0_next), cy_next + r * math.sin(a0_next))
         mid = ((run_start[0] + run_end[0]) / 2.0, (run_start[1] + run_end[1]) / 2.0)
-        if math.hypot(mid[0] - run_start[0], mid[1] - run_start[1]) > 1e-9:
+        if math.hypot(run_end[0] - run_start[0], run_end[1] - run_start[1]) > 1e-9:
             verts.append(mid)
 
     deduped: list[tuple[float, float]] = []
@@ -514,7 +514,7 @@ def generate_loop_osm_with_stop_lines(
     out-of-range segment_index.
     """
     base = generate_loop_osm(vertices, lane_width, speed_limit)
-    if not stop_lines:
+    if not stop_lines:  # None or empty -> no stop-line geometry to add
         return base
     n = len(vertices)
     normals = _vertex_normals(vertices)
