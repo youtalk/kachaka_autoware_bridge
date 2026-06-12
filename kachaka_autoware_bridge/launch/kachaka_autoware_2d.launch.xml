@@ -30,11 +30,23 @@
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
-  <include file="$(find-pkg-share kachaka_grpc_ros2_bridge)/launch/grpc_ros2_bridge.launch.xml">
+  <!-- Vendored bridge launch: identical to upstream except dynamic TF lands on
+       /kachaka/tf_raw; tf_gate forwards it to /tf (dropping map->odom in ndt
+       mode so the EKF-derived edge can own it). One launch path for all
+       localization modes.
+       In ndt mode tf_gate drops map->odom and the map_to_odom_adapter publishes
+       it once the EKF converges; until then /tf has odom->base_footprint but no
+       map->odom, so map->base lookups fail until initialization completes (an
+       expected, bounded startup window, not a fault). -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_grpc_bridge_core.launch.xml">
     <arg name="server_uri" value="$(var server_uri)"/>
     <arg name="namespace" value="kachaka"/>
     <arg name="frame_prefix" value=""/>
   </include>
+  <node pkg="kachaka_autoware_bridge" exec="tf_gate" name="tf_gate" output="both">
+    <param name="input_topic" value="/kachaka/tf_raw"/>
+    <param name="drop_edges" value="$(eval &quot;'map:odom' if '$(var localization_mode)'=='ndt' else ''&quot;)"/>
+  </node>
 
   <!-- Localization: republish Kachaka SLAM pose as /localization/kinematic_state.
        No NDT / EKF / pointcloud map: Kachaka already publishes map -> odom.
