@@ -7,7 +7,8 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
 install(
-  PROGRAMS scripts/perception_stub
+  PROGRAMS scripts/localization_monitor
+           scripts/perception_stub
            scripts/publish_canned_trajectory
            scripts/publish_initialization_state
            scripts/run_endurance

@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Measure NDT+EKF divergence against Kachaka SLAM; own the re-init plumbing.
+
+Modes:
+  shadow: reference = /localization/kinematic_state (Kachaka TF passthrough),
+          estimate  = /localization/shadow/kinematic_state (shadow EKF).
+  ndt:    reference = Kachaka's raw map->odom (still on /kachaka/tf_raw even
+          though the tf_gate drops it from /tf) composed with the live
+          odom->base_link, estimate = /localization/kinematic_state (real EKF).
+
+Publishes ~/divergence (geometry_msgs/Vector3Stamped: x = translation error
+[m], y = signed yaw error [rad], z = estimate age [s]) every publish_period,
+plus a /diagnostics status named "localization_monitor" (WARN when the
+HealthTracker trips).
+
+~/reinitialize (std_srvs/Trigger) re-seeds the stack from the CURRENT
+reference pose via the InitializeLocalization service (method=AUTO so
+ndt_align refines the guess). The Trigger only schedules the call (the actual
+service call runs in the main loop -- calling a service from inside a service
+callback on a single-threaded spinner deadlocks); success means "dispatched".
+Recovery confirmation is the divergence feed dropping back under threshold,
+which the endurance orchestrator watches. auto_initialize:=true schedules one
+call at startup (the EKF outputs nothing until first initialization).
+"""
+
+import sys
+import time
+
+import rclpy
+import rclpy.time
+import tf2_ros
+from autoware_internal_localization_msgs.srv import InitializeLocalization
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from geometry_msgs.msg import PoseWithCovarianceStamped, Vector3Stamped
+from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
+from rclpy.node import Node
+from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
+
+from kachaka_autoware_bridge.locmon import (
+    HealthConfig,
+    HealthTracker,
+    PoseSample,
+    divergence,
+)
+from kachaka_autoware_bridge.se3 import compose, quat_to_yaw
+
+SERVICE_TIMEOUT_SEC = 10.0
+# Covariance for the re-init guess: Kachaka SLAM is trusted to well under
+# 0.5 m / 0.25 rad indoors; method=AUTO has ndt_align refine it anyway.
+INIT_COV_XX = 0.25
+INIT_COV_YAW = 0.0625
+
+
+class LocalizationMonitor(Node):
+    def __init__(self) -> None:
+        super().__init__("localization_monitor")
+        self.declare_parameter("mode", "shadow")  # shadow | ndt
+        self.declare_parameter("reference_odom_topic", "/localization/kinematic_state")
+        self.declare_parameter("estimate_odom_topic", "/localization/shadow/kinematic_state")
+        self.declare_parameter("kachaka_tf_topic", "/kachaka/tf_raw")
+        self.declare_parameter("initialize_service", "/localization/shadow/initialize")
+        self.declare_parameter("auto_initialize", True)
+        self.declare_parameter("publish_period", 1.0)
+        self.declare_parameter("translation_threshold_m", 0.5)
+        self.declare_parameter("yaw_threshold_rad", 0.5)
+        self.declare_parameter("stale_sec", 3.0)
+
+        self.mode = str(self.get_parameter("mode").value)
+        if self.mode not in ("shadow", "ndt"):
+            raise ValueError(f"mode must be shadow|ndt, got {self.mode!r}")
+        self.publish_period = float(self.get_parameter("publish_period").value)
+        self._tracker = HealthTracker(
+            HealthConfig(
+                translation_threshold_m=float(self.get_parameter("translation_threshold_m").value),
+                yaw_threshold_rad=float(self.get_parameter("yaw_threshold_rad").value),
+                stale_sec=float(self.get_parameter("stale_sec").value),
+            )
+        )
+
+        # (translation, quaternion, wall receipt time) of reference / estimate.
+        self._ref: tuple[tuple, tuple, float] | None = None
+        self._est: tuple[tuple, tuple, float] | None = None
+        self._kachaka_map_odom: tuple[tuple, tuple, float] | None = None
+        self._init_requested = bool(self.get_parameter("auto_initialize").value)
+        self._init_done_once = False
+
+        est_topic = str(self.get_parameter("estimate_odom_topic").value)
+        self.create_subscription(Odometry, est_topic, self._on_estimate, 10)
+        if self.mode == "shadow":
+            ref_topic = str(self.get_parameter("reference_odom_topic").value)
+            self.create_subscription(Odometry, ref_topic, self._on_reference_odom, 10)
+        else:
+            tf_topic = str(self.get_parameter("kachaka_tf_topic").value)
+            self.create_subscription(TFMessage, tf_topic, self._on_kachaka_tf, 100)
+            self.tf_buffer = tf2_ros.Buffer()
+            self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        self.init_cli = self.create_client(
+            InitializeLocalization, str(self.get_parameter("initialize_service").value)
+        )
+        self.div_pub = self.create_publisher(Vector3Stamped, "~/divergence", 10)
+        self.diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
+        self.create_service(Trigger, "~/reinitialize", self._on_reinitialize)
+        self.get_logger().info(f"localization_monitor up: mode={self.mode}")
+
+    # ---- subscriptions ----
+    @staticmethod
+    def _odom_to_tq(msg: Odometry):
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        return (p.x, p.y, p.z), (q.x, q.y, q.z, q.w)
+
+    def _on_estimate(self, msg: Odometry) -> None:
+        t, q = self._odom_to_tq(msg)
+        self._est = (t, q, time.monotonic())
+
+    def _on_reference_odom(self, msg: Odometry) -> None:
+        t, q = self._odom_to_tq(msg)
+        self._ref = (t, q, time.monotonic())
+
+    def _on_kachaka_tf(self, msg: TFMessage) -> None:
+        for tr in msg.transforms:
+            if tr.header.frame_id.lstrip("/") == "map" and tr.child_frame_id.lstrip("/") == "odom":
+                t = (tr.transform.translation.x, tr.transform.translation.y, tr.transform.translation.z)
+                q = (tr.transform.rotation.x, tr.transform.rotation.y,
+                     tr.transform.rotation.z, tr.transform.rotation.w)
+                self._kachaka_map_odom = (t, q, time.monotonic())
+
+    def _ndt_reference(self) -> None:
+        """ndt mode: reference map->base_link = kachaka raw map->odom composed
+        with the live odom->base_link from /tf (wheel odometry, still gated
+        through). Refreshes self._ref; leaves it untouched on a TF miss."""
+        if self._kachaka_map_odom is None:
+            return
+        try:
+            tr = self.tf_buffer.lookup_transform(
+                "odom", "base_link", rclpy.time.Time(), timeout=Duration(seconds=0.1)
+            )
+        except tf2_ros.TransformException:
+            return
+        ob_t = (tr.transform.translation.x, tr.transform.translation.y, tr.transform.translation.z)
+        ob_q = (tr.transform.rotation.x, tr.transform.rotation.y,
+                tr.transform.rotation.z, tr.transform.rotation.w)
+        mo_t, mo_q, stamp = self._kachaka_map_odom
+        t, q = compose(mo_t, mo_q, ob_t, ob_q)
+        self._ref = (t, q, stamp)
+
+    # ---- reinitialize ----
+    def _on_reinitialize(self, _req, resp):
+        self._init_requested = True
+        resp.success = True
+        resp.message = "reinitialize scheduled from reference pose"
+        return resp
+
+    def _try_initialize(self) -> None:
+        """Run a scheduled initialize from the main loop (never from a service
+        callback). Keeps the request flag on failure so the next tick retries."""
+        if self._ref is None:
+            self.get_logger().warning(
+                "reinitialize pending but no reference pose received yet",
+                throttle_duration_sec=5.0,
+            )
+            return
+        if not self.init_cli.service_is_ready():
+            self.get_logger().warning(
+                f"reinitialize pending but service {self.init_cli.srv_name} not ready",
+                throttle_duration_sec=5.0,
+            )
+            return
+        t, q, _ = self._ref
+        pose = PoseWithCovarianceStamped()
+        pose.header.frame_id = "map"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.pose.position.x, pose.pose.pose.position.y, pose.pose.pose.position.z = t
+        (pose.pose.pose.orientation.x, pose.pose.pose.orientation.y,
+         pose.pose.pose.orientation.z, pose.pose.pose.orientation.w) = q
+        pose.pose.covariance[0] = INIT_COV_XX
+        pose.pose.covariance[7] = INIT_COV_XX
+        pose.pose.covariance[35] = INIT_COV_YAW
+        req = InitializeLocalization.Request()
+        req.pose_with_covariance = [pose]
+        req.method = InitializeLocalization.Request.AUTO
+        fut = self.init_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, fut, timeout_sec=SERVICE_TIMEOUT_SEC)
+        result = fut.result()
+        ok = result is not None and result.status.success
+        self.get_logger().info(f"initialize call: {'ok' if ok else 'FAILED'}")
+        if ok:
+            self._init_requested = False
+            self._init_done_once = True
+
+    # ---- periodic output ----
+    def tick(self) -> None:
+        if self._init_requested:
+            self._try_initialize()
+        if self.mode == "ndt":
+            self._ndt_reference()
+        now = time.monotonic()
+        if self._ref is None or self._est is None:
+            return
+        ref_t, ref_q, _ = self._ref
+        est_t, est_q, est_stamp = self._est
+        trans, yaw = divergence(
+            PoseSample(ref_t[0], ref_t[1], quat_to_yaw(ref_q)),
+            PoseSample(est_t[0], est_t[1], quat_to_yaw(est_q)),
+        )
+        est_age = now - est_stamp
+        unhealthy = self._tracker.update(trans, yaw, est_age)
+
+        out = Vector3Stamped()
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.header.frame_id = "map"
+        out.vector.x, out.vector.y, out.vector.z = trans, yaw, est_age
+        self.div_pub.publish(out)
+
+        status = DiagnosticStatus(
+            level=DiagnosticStatus.WARN if unhealthy else DiagnosticStatus.OK,
+            name="localization_monitor",
+            message="diverged" if unhealthy else "ok",
+            values=[
+                KeyValue(key="translation_m", value=f"{trans:.3f}"),
+                KeyValue(key="yaw_rad", value=f"{yaw:.3f}"),
+                KeyValue(key="estimate_age_s", value=f"{est_age:.1f}"),
+                KeyValue(key="initialized", value=str(self._init_done_once)),
+            ],
+        )
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.status.append(status)
+        self.diag_pub.publish(arr)
+
+
+def main() -> int:
+    rclpy.init()
+    node = LocalizationMonitor()
+    try:
+        next_tick = time.monotonic()
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
+            if time.monotonic() >= next_tick:
+                node.tick()
+                next_tick = time.monotonic() + node.publish_period
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
