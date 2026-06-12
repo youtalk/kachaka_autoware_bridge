@@ -21,7 +21,8 @@
                     shadow: passthrough still drives; NDT+EKF run namespaced under
                     /localization/shadow with no TF output, localization_monitor logs divergence.
                     ndt: NDT+EKF own map->odom (Task 12). shadow/ndt require launch_planning:=true
-                    (the pointcloud map loader rides the map group) and the OS-1 mounted."/>
+                    (the pointcloud map loader rides the map group) and the OS-1 mounted.
+                    shadow/ndt also require launch_control:=true (the EKF's twist comes from the vehicle interface in that group)."/>
   <arg name="sensor_hostname" default="os-sensor.local"
        description="Ouster OS-1 hostname/IP (shadow/ndt modes only)."/>
   <let name="loc_shadow" value="$(eval &quot;'$(var localization_mode)'=='shadow'&quot;)"/>

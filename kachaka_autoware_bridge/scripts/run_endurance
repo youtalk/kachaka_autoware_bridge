@@ -213,6 +213,10 @@ class EnduranceNode(Node):
         self._relocalize_count = 0
         self._relocalize_attempts = 0
         self._next_relocalize_wall = 0.0
+        self.declare_parameter("loc_feed_timeout_sec", 5.0)
+        self._loc_feed_timeout_sec = float(self.get_parameter("loc_feed_timeout_sec").value)
+        self._divergence_configured = bool(divergence_topic)
+        self._last_div_wall: float | None = None
         if divergence_topic:
             self.create_subscription(Vector3Stamped, divergence_topic, self._on_divergence, 10)
         self.reinit_cli = self.create_client(
@@ -295,14 +299,42 @@ class EnduranceNode(Node):
 
     def _on_divergence(self, msg: Vector3Stamped) -> None:
         # x = translation error [m], y = yaw error [rad], z = estimate age [s]
-        # (localization_monitor contract). The tracker debounces both edges; a
-        # stale-feed sample also counts as bad, so a dead monitor exhausts the
-        # relocalize budget and surfaces as a FAULT instead of silently
-        # disabling recovery.
+        # (localization_monitor contract). The tracker debounces both edges.
+        # EKF-output staleness is carried by z (the monitor keeps publishing a
+        # growing age when NDT/EKF stops); monitor-NODE death is caught
+        # separately by _check_divergence_feed (the feed itself going silent).
         self._loc_tracker.update(msg.vector.x, msg.vector.y, msg.vector.z)
         self._div_max = max(self._div_max, msg.vector.x)
         self._div_sum += msg.vector.x
         self._div_count += 1
+        self._last_div_wall = time.monotonic()
+
+    def _check_divergence_feed(self) -> None:
+        """Watchdog for the divergence feed itself (ndt recovery). The
+        HealthTracker only sees samples delivered to _on_divergence, so a dead
+        monitor node (no samples at all) would freeze the tracker healthy and
+        silently disable recovery. Here we age the feed: once recovery is
+        enabled and the feed has been silent past loc_feed_timeout_sec, push a
+        stale sample into the tracker so it trips unhealthy -> RELOCALIZING ->
+        (reinit cannot revive a dead monitor) -> budget exhausts -> FAULT,
+        surfacing the dead monitor instead of driving on blind. Only armed in
+        RUNNING/RELOCALIZING so a slow monitor start during bring-up cannot
+        false-trip."""
+        if self.state not in (State.RUNNING, State.RELOCALIZING):
+            return
+        if not self._loc_recovery_enabled or not self._divergence_configured:
+            return
+        now = time.monotonic()
+        if self._last_div_wall is None:
+            # Start the grace clock the first time we are armed; a feed that
+            # never produces within the timeout still trips.
+            self._last_div_wall = now
+            return
+        age = now - self._last_div_wall
+        if age > self._loc_feed_timeout_sec:
+            # Reuse the tracker's staleness path: a (0, 0, age) sample is bad
+            # purely on age, identical to how the monitor reports EKF staleness.
+            self._loc_tracker.update(0.0, 0.0, age)
 
     # ---- stop services ----
     def _on_stop_graceful(self, _req, resp):
@@ -499,6 +531,7 @@ class EnduranceNode(Node):
 
     # ---- top-level tick ----
     def _tick(self) -> None:
+        self._check_divergence_feed()
         self._update_laps()
         self._publish_status()
         obs = self._observe()
