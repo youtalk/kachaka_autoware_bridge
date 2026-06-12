@@ -21,6 +21,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_loop_route test/test_loop_route.py)
   ament_add_pytest_test(test_endurance test/test_endurance.py)
   ament_add_pytest_test(test_se3 test/test_se3.py)
+  ament_add_pytest_test(test_locmon test/test_locmon.py)
 endif()
 
 ament_package()
