@@ -8,6 +8,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(
   PROGRAMS scripts/localization_monitor
+           scripts/map_to_odom_adapter
            scripts/perception_stub
            scripts/publish_canned_trajectory
            scripts/publish_initialization_state
