@@ -30,5 +30,9 @@
     <param name="loop_params_path" value="$(var map_path)/loop_params.yaml"/>
     <param name="seed" value="$(var seed)"/>
     <param name="max_duration_sec" value="$(var max_duration_sec)"/>
+    <param name="divergence_topic"
+           value="$(eval &quot;'/localization_monitor/divergence' if '$(var localization_mode)' != 'kachaka' else ''&quot;)"/>
+    <param name="divergence_drives_recovery"
+           value="$(eval &quot;'$(var localization_mode)' == 'ndt'&quot;)"/>
   </node>
 </launch>

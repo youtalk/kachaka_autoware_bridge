@@ -41,9 +41,11 @@ from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
 )
+from geometry_msgs.msg import Vector3Stamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from kachaka_autoware_bridge.locmon import HealthConfig, HealthTracker
 from kachaka_autoware_bridge.endurance import (
     Action,
     Observation,
@@ -80,6 +82,8 @@ SERVICE_TIMEOUT_SEC = 10.0
 ODOM_STALE_SEC = 5.0              # no /localization/kinematic_state this long -> hard fault
 RECOVER_BACKOFF_SEC = 2.0        # re-engage retry spacing in RECOVERING
 MAX_REENGAGE_ATTEMPTS = 3        # exceeded -> hard fault
+MAX_RELOCALIZE_ATTEMPTS = 3      # reinit calls per RELOCALIZING episode; exceeded -> hard fault
+RELOCALIZE_BACKOFF_SEC = 5.0     # spacing between reinit attempts (NDT align + EKF settle)
 ONTO_RING_MAX_ATTEMPTS = 4       # onto-ring drive-on retries before a hard fault
 ONTO_RING_BACKOFF_SEC = 5.0      # spacing between onto-ring retries (lets Kachaka nav recover)
 STEP_SETTLE_SEC = 3.0            # ignore mode!=AUTONOMOUS this long after a step begins
@@ -153,6 +157,17 @@ class EnduranceNode(Node):
         self.declare_parameter("carrot_refresh_len", 0.5)
         self.declare_parameter("session_dir", str(Path.home() / "endurance_runs"))
 
+        # Localization recovery (M7). divergence_topic empty = feature off
+        # (kachaka mode). divergence_drives_recovery False = record stats only
+        # (shadow mode: the robot drives on Kachaka SLAM, shadow divergence
+        # must never stop it).
+        self.declare_parameter("divergence_topic", "")
+        self.declare_parameter("divergence_drives_recovery", False)
+        self.declare_parameter("reinitialize_service", "/localization_monitor/reinitialize")
+        self.declare_parameter("loc_translation_threshold_m", 0.5)
+        self.declare_parameter("loc_yaw_threshold_rad", 0.5)
+        self.declare_parameter("loc_stale_sec", 3.0)
+
         loop_params_value = str(self.get_parameter("loop_params_path").value)
         if not loop_params_value:
             loop_params_value = str(Path.home() / "maps" / "kachaka_loop" / "loop_params.yaml")
@@ -182,6 +197,27 @@ class EnduranceNode(Node):
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, 1)
         self.create_subscription(RouteState, ROUTE_STATE_TOPIC, self._on_route_state, LATCHED_QOS)
         self.create_subscription(OperationModeState, OPERATION_MODE_TOPIC, self._on_mode, LATCHED_QOS)
+
+        divergence_topic = str(self.get_parameter("divergence_topic").value)
+        self._loc_recovery_enabled = bool(self.get_parameter("divergence_drives_recovery").value)
+        self._loc_tracker = HealthTracker(
+            HealthConfig(
+                translation_threshold_m=float(self.get_parameter("loc_translation_threshold_m").value),
+                yaw_threshold_rad=float(self.get_parameter("loc_yaw_threshold_rad").value),
+                stale_sec=float(self.get_parameter("loc_stale_sec").value),
+            )
+        )
+        self._div_max = 0.0
+        self._div_sum = 0.0
+        self._div_count = 0
+        self._relocalize_count = 0
+        self._relocalize_attempts = 0
+        self._next_relocalize_wall = 0.0
+        if divergence_topic:
+            self.create_subscription(Vector3Stamped, divergence_topic, self._on_divergence, 10)
+        self.reinit_cli = self.create_client(
+            Trigger, str(self.get_parameter("reinitialize_service").value)
+        )
 
         # Clients
         self.set_cli = self.create_client(SetRoutePoints, SET_ROUTE_SERVICE)
@@ -257,6 +293,17 @@ class EnduranceNode(Node):
     def _on_mode(self, msg: OperationModeState) -> None:
         self.latest_mode = msg
 
+    def _on_divergence(self, msg: Vector3Stamped) -> None:
+        # x = translation error [m], y = yaw error [rad], z = estimate age [s]
+        # (localization_monitor contract). The tracker debounces both edges; a
+        # stale-feed sample also counts as bad, so a dead monitor exhausts the
+        # relocalize budget and surfaces as a FAULT instead of silently
+        # disabling recovery.
+        self._loc_tracker.update(msg.vector.x, msg.vector.y, msg.vector.z)
+        self._div_max = max(self._div_max, msg.vector.x)
+        self._div_sum += msg.vector.x
+        self._div_count += 1
+
     # ---- stop services ----
     def _on_stop_graceful(self, _req, resp):
         self._stop_request = StopReason.OPERATOR
@@ -294,6 +341,7 @@ class EnduranceNode(Node):
                 KeyValue(key="seed", value=str(self.seed)),
                 KeyValue(key="recenters", value=str(self._recenter_count)),
                 KeyValue(key="stops", value=str(self._stop_count)),
+                KeyValue(key="relocalizes", value=str(self._relocalize_count)),
             ],
         )
         arr = DiagnosticArray()
@@ -480,6 +528,8 @@ class EnduranceNode(Node):
             self._run_scenario_tick()
         elif self.state is State.RECOVERING:
             self._recovering_tick()
+        elif self.state is State.RELOCALIZING:
+            self._relocalizing_tick()
         if self.state is State.DONE:
             self._done = True
 
@@ -491,6 +541,21 @@ class EnduranceNode(Node):
         self._reengage_attempts += 1
         self._emit_event("recover_attempt", n=self._reengage_attempts)
         self._change_mode(True)
+
+    def _do_relocalize(self) -> None:
+        self._relocalize_attempts += 1
+        self._next_relocalize_wall = time.monotonic() + RELOCALIZE_BACKOFF_SEC
+        self._emit_event("relocalize_attempt", n=self._relocalize_attempts)
+        ok = self._call(self.reinit_cli, Trigger.Request())
+        if not ok:
+            self.get_logger().warning("reinitialize service call failed; will retry")
+
+    def _relocalizing_tick(self) -> None:
+        if time.monotonic() < self._next_relocalize_wall:
+            return
+        if self._relocalize_attempts >= MAX_RELOCALIZE_ATTEMPTS:
+            return  # _observe reports exhausted; the FSM faults on the next tick
+        self._do_relocalize()
 
     def _observe(self) -> Observation:
         now = time.monotonic()
@@ -555,13 +620,21 @@ class EnduranceNode(Node):
                 and self._radial_error() > RECENTER_TRIGGER_M
             )
             return Observation(
-                stop_request=stop, hard_fault=hard, transient_fault=transient, off_ring=off_ring
+                stop_request=stop, hard_fault=hard, transient_fault=transient, off_ring=off_ring,
+                loc_unhealthy=self._loc_recovery_enabled and self._loc_tracker.unhealthy,
             )
         if self.state is State.RECOVERING:
             return Observation(
                 hard_fault=hard,
                 recovered=self._mode_is_autonomous(),
                 retry_exhausted=self._reengage_attempts >= MAX_REENGAGE_ATTEMPTS,
+                stop_request=stop,
+            )
+        if self.state is State.RELOCALIZING:
+            return Observation(
+                hard_fault=hard,
+                loc_recovered=not self._loc_tracker.unhealthy,
+                relocalize_exhausted=self._relocalize_attempts >= MAX_RELOCALIZE_ATTEMPTS,
                 stop_request=stop,
             )
         return Observation(stop_request=stop)
@@ -597,6 +670,11 @@ class EnduranceNode(Node):
                 self._write_session_record(StopReason.FAULT)
             elif action is Action.WRITE_SESSION_RECORD:
                 self._write_session_record(transition.stop_reason)
+            elif action is Action.RELOCALIZE:
+                self._relocalize_attempts = 0
+                self._next_relocalize_wall = 0.0
+                self._relocalize_count += 1
+                self._do_relocalize()
 
     def _do_onto_ring(self) -> None:
         """One onto-ring drive-on attempt. On failure, schedule a backoff retry;
@@ -742,6 +820,9 @@ class EnduranceNode(Node):
             fault_info=self._fault_info,
             recenter_count=self._recenter_count,
             stop_count=self._stop_count,
+            relocalize_count=self._relocalize_count,
+            divergence_max_m=round(self._div_max, 3),
+            divergence_mean_m=round(self._div_sum / self._div_count, 3) if self._div_count else 0.0,
         )
         out = self.session_dir / f"session_{self.start_iso.replace(':', '-')}.json"
         out.write_text(record.to_json())
