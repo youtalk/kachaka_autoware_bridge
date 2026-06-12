@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Map-stitching capture. PRECONDITION: the kachaka_autoware_2d stack is
+       already running in localization_mode:=kachaka (Kachaka SLAM publishes
+       map->odom->base_footprint TF, which this capture stitches against).
+       This launch adds only the OS-1 driver, the shelf URDF (base_link ->
+       os_lidar extrinsics), and the stitcher. Drive 2-3 slow laps, then
+       SIGINT: the map is written on exit. -->
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname or IP."/>
+  <arg name="output_dir" default="$(env HOME)/maps/kachaka_loop"
+       description="Map directory; pointcloud_map.pcd + metadata land next to the existing loop lanelet map."/>
+
+  <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py"/>
+
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/sensor_ouster.launch.xml">
+    <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
+  </include>
+
+  <node pkg="kachaka_autoware_maps" exec="stitch_map" name="stitch_map" output="screen">
+    <param name="output_dir" value="$(var output_dir)"/>
+  </node>
+</launch>
