@@ -2,6 +2,8 @@
 <launch>
   <arg name="vehicle_info_param_file"
        default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
+  <arg name="launch_twist2accel" default="true"
+       description="false in ndt localization mode: the EKF publishes /localization/acceleration directly, so the twist2accel stub is skipped."/>
 
   <!--
     Use the local fork of autoware_core_planning's launch (see
@@ -21,5 +23,7 @@
     twist2accel + empty perception stubs). autoware_core planning blocks on
     these inputs otherwise, leaving /planning/trajectory empty.
   -->
-  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/no_perception_stubs.launch.xml"/>
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/no_perception_stubs.launch.xml">
+    <arg name="launch_twist2accel" value="$(var launch_twist2accel)"/>
+  </include>
 </launch>

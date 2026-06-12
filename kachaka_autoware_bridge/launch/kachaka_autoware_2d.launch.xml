@@ -80,6 +80,26 @@
     </node>
   </group>
 
+  <!-- NDT localization owns the stack: real namespace (/localization/...),
+       EKF TF still remapped away (the adapter owns map->odom; the tf_gate
+       drops Kachaka's), passthrough + INITIALIZED stub + twist2accel stub all
+       replaced by the real components. Kachaka SLAM stays available on
+       /kachaka/tf_raw as the monitor's reference and the recovery seed. -->
+  <group if="$(var loc_ndt)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_localization_core.launch.xml">
+      <arg name="ns" value="/localization"/>
+      <arg name="ekf_tf_topic" value="/localization/tf_unused"/>
+    </include>
+    <node pkg="kachaka_autoware_bridge" exec="map_to_odom_adapter" name="map_to_odom_adapter" output="both"/>
+    <node pkg="kachaka_autoware_bridge" exec="localization_monitor" name="localization_monitor" output="both">
+      <param name="mode" value="ndt"/>
+      <param name="estimate_odom_topic" value="/localization/kinematic_state"/>
+      <param name="kachaka_tf_topic" value="/kachaka/tf_raw"/>
+      <param name="initialize_service" value="/localization/initialize"/>
+      <param name="auto_initialize" value="true"/>
+    </node>
+  </group>
+
   <!-- Control + Vehicle Interface (M2). simple_pure_pursuit consumes
        /localization/kinematic_state + /planning/trajectory and publishes
        /control/command/control_cmd; the vehicle interface converts it to a Twist
@@ -104,8 +124,10 @@
     </include>
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/planning.launch.xml">
       <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+      <arg name="launch_twist2accel" value="$(eval &quot;not $(var loc_ndt)&quot;)"/>
     </include>
-    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"/>
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"
+             unless="$(var loc_ndt)"/>
   </group>
 
   <!-- AD-API (M3/M4): routing + localization + interface adapters.
