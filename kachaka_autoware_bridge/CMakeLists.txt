@@ -12,7 +12,8 @@ install(
            scripts/publish_canned_trajectory
            scripts/publish_initialization_state
            scripts/run_endurance
-           scripts/set_loop_route DESTINATION lib/${PROJECT_NAME})
+           scripts/set_loop_route
+           scripts/tf_gate DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
 
@@ -23,6 +24,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_endurance test/test_endurance.py)
   ament_add_pytest_test(test_se3 test/test_se3.py)
   ament_add_pytest_test(test_locmon test/test_locmon.py)
+  ament_add_pytest_test(test_tf_gate test/test_tf_gate.py)
 endif()
 
 ament_package()
