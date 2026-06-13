@@ -20,13 +20,15 @@ from kachaka_autoware_bridge.endurance import (
 
 def test_enums_have_expected_members() -> None:
     assert {s.value for s in State} == {
-        "init", "onto_ring", "running", "recovering", "stopping", "fault", "done",
+        "init", "onto_ring", "running", "recovering", "relocalizing",
+        "stopping", "fault", "done",
     }
     assert {r.value for r in StopReason} == {"none", "battery", "duration", "operator", "fault"}
     assert {m.value for m in StepMode} == {"cruise", "dwell", "arrive"}
     assert {a.value for a in Action} == {
-        "drive_onto_ring", "start_running", "reengage", "safe_stop", "clear_route",
-        "return_home", "capture_diagnostics", "write_fault_report", "write_session_record",
+        "drive_onto_ring", "start_running", "reengage", "relocalize", "safe_stop",
+        "clear_route", "return_home", "capture_diagnostics", "write_fault_report",
+        "write_session_record",
     }
 
 
@@ -166,7 +168,7 @@ def test_off_ring_is_the_lowest_priority_running_corrective() -> None:
 
 
 def test_hard_fault_preempts_from_any_running_state() -> None:
-    for st in (State.ONTO_RING, State.RUNNING, State.RECOVERING):
+    for st in (State.ONTO_RING, State.RUNNING, State.RECOVERING, State.RELOCALIZING):
         t = decide_transition(st, Observation(hard_fault=True))
         assert t.next_state is State.FAULT
         assert Action.CAPTURE_DIAGNOSTICS in t.actions
@@ -285,3 +287,72 @@ def test_hard_fault_still_preempts_stop_request_outside_running() -> None:
         State.ONTO_RING, Observation(hard_fault=True, stop_request=StopReason.OPERATOR)
     )
     assert t.next_state is State.FAULT
+
+
+def test_running_loc_unhealthy_enters_relocalizing_with_stop() -> None:
+    tr = decide_transition(State.RUNNING, Observation(loc_unhealthy=True))
+    assert tr.next_state is State.RELOCALIZING
+    assert tr.actions == (Action.SAFE_STOP, Action.RELOCALIZE)
+
+
+def test_loc_unhealthy_is_lower_priority_than_transient_and_higher_than_off_ring() -> None:
+    # transient mode-drop wins (mode must be restored before judging localization)
+    tr = decide_transition(State.RUNNING, Observation(loc_unhealthy=True, transient_fault=True))
+    assert tr.next_state is State.RECOVERING
+    # a diverged estimate must NOT trigger a re-center: the radial error is
+    # computed FROM the diverged estimate, so relocalize first.
+    tr = decide_transition(State.RUNNING, Observation(loc_unhealthy=True, off_ring=True))
+    assert tr.next_state is State.RELOCALIZING
+
+
+def test_relocalizing_recovered_reenters_via_onto_ring() -> None:
+    tr = decide_transition(State.RELOCALIZING, Observation(loc_recovered=True))
+    assert tr.next_state is State.ONTO_RING
+    assert tr.actions == (Action.DRIVE_ONTO_RING,)
+
+
+def test_relocalizing_exhausted_faults() -> None:
+    tr = decide_transition(State.RELOCALIZING, Observation(relocalize_exhausted=True))
+    assert tr.next_state is State.FAULT
+    assert Action.WRITE_FAULT_REPORT in tr.actions
+
+
+def test_relocalizing_honors_hard_fault_and_stop() -> None:
+    tr = decide_transition(State.RELOCALIZING, Observation(hard_fault=True))
+    assert tr.next_state is State.FAULT
+    tr = decide_transition(State.RELOCALIZING, Observation(stop_request=StopReason.OPERATOR))
+    assert tr.next_state is State.STOPPING
+
+
+def test_relocalizing_waits_otherwise() -> None:
+    tr = decide_transition(State.RELOCALIZING, Observation())
+    assert tr.next_state is State.RELOCALIZING
+    assert tr.actions == ()
+
+
+def test_session_record_carries_relocalize_and_divergence_stats() -> None:
+    record = SessionRecord(
+        start_iso="2026-06-12T00:00:00+00:00",
+        end_iso="2026-06-12T01:00:00+00:00",
+        stop_reason=StopReason.DURATION,
+        lap_count=10.0,
+        step_histogram={"cruise": 5},
+        seed=1,
+        relocalize_count=2,
+        divergence_max_m=0.42,
+        divergence_mean_m=0.05,
+    )
+    data = json.loads(record.to_json())
+    assert data["relocalize_count"] == 2
+    assert data["divergence_max_m"] == 0.42
+    assert data["divergence_mean_m"] == 0.05
+
+
+def test_relocalizing_exhausted_wins_over_recovered() -> None:
+    # Both flags on the same tick: the budget backstop takes priority -- once
+    # relocalize attempts are exhausted, fault rather than risk another loop
+    # even if this re-seed happened to converge.
+    tr = decide_transition(
+        State.RELOCALIZING, Observation(relocalize_exhausted=True, loc_recovered=True)
+    )
+    assert tr.next_state is State.FAULT

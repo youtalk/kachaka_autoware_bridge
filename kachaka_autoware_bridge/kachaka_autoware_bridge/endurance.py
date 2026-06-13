@@ -23,6 +23,7 @@ class State(Enum):
     ONTO_RING = "onto_ring"
     RUNNING = "running"
     RECOVERING = "recovering"
+    RELOCALIZING = "relocalizing"
     STOPPING = "stopping"
     FAULT = "fault"
     DONE = "done"
@@ -46,6 +47,7 @@ class Action(Enum):
     DRIVE_ONTO_RING = "drive_onto_ring"
     START_RUNNING = "start_running"
     REENGAGE = "reengage"
+    RELOCALIZE = "relocalize"
     SAFE_STOP = "safe_stop"
     CLEAR_ROUTE = "clear_route"
     RETURN_HOME = "return_home"
@@ -130,6 +132,9 @@ class Observation:
     transient_fault: bool = False
     recovered: bool = False
     retry_exhausted: bool = False
+    loc_unhealthy: bool = False
+    loc_recovered: bool = False
+    relocalize_exhausted: bool = False
     stop_request: StopReason = StopReason.NONE
 
 
@@ -156,7 +161,7 @@ def decide_transition(state: State, obs: Observation) -> Transition:
     transient_fault. A hard fault always halts-and-captures and never restarts a
     node (preserving the failure and the memory baseline for analysis).
     """
-    running_states = (State.ONTO_RING, State.RUNNING, State.RECOVERING)
+    running_states = (State.ONTO_RING, State.RUNNING, State.RECOVERING, State.RELOCALIZING)
     if state in running_states and obs.hard_fault:
         return Transition(State.FAULT, _FAULT_ACTIONS, StopReason.FAULT)
 
@@ -164,7 +169,9 @@ def decide_transition(state: State, obs: Observation) -> Transition:
     # just RUNNING, so a stop requested during bring-up, drive-on, or recovery
     # still halts cleanly and writes a session record. A hard fault (above) still
     # preempts it; transient/off-ring handling (below) is lower priority.
-    non_terminal = (State.INIT, State.ONTO_RING, State.RUNNING, State.RECOVERING)
+    non_terminal = (
+        State.INIT, State.ONTO_RING, State.RUNNING, State.RECOVERING, State.RELOCALIZING
+    )
     if state in non_terminal and obs.stop_request is not StopReason.NONE:
         return Transition(State.STOPPING, _STOP_ACTIONS, obs.stop_request)
 
@@ -195,6 +202,14 @@ def decide_transition(state: State, obs: Observation) -> Transition:
     if state is State.RUNNING:
         if obs.transient_fault:
             return Transition(State.RECOVERING)
+        # Localization divergence (ndt mode): the estimate the planner steers by
+        # has drifted from the trusted Kachaka SLAM reference. Stop and re-seed
+        # NDT from the reference. Sits BELOW transient (operation mode must be
+        # sane before re-initializing) and ABOVE off_ring (the radial error is
+        # computed from the diverged estimate -- re-centering on it would chase
+        # a phantom).
+        if obs.loc_unhealthy:
+            return Transition(State.RELOCALIZING, (Action.SAFE_STOP, Action.RELOCALIZE))
         # Re-centering: the robot has drifted off the loop centerline (the sub-1 m
         # loop's outward control-tracking drift). Re-enter the tested ONTO_RING
         # path to reposition onto the centerline, bounding the accumulating drift.
@@ -210,6 +225,16 @@ def decide_transition(state: State, obs: Observation) -> Transition:
         if obs.recovered:
             return Transition(State.RUNNING, (Action.REENGAGE,))
         return Transition(State.RECOVERING)
+
+    if state is State.RELOCALIZING:
+        if obs.relocalize_exhausted:
+            return Transition(State.FAULT, _FAULT_ACTIONS, StopReason.FAULT)
+        if obs.loc_recovered:
+            # Divergence is back under threshold. Re-enter via the tested
+            # ONTO_RING drive-on: the corrected pose may have jumped, so
+            # physically re-centering before re-engaging is the safe path.
+            return Transition(State.ONTO_RING, (Action.DRIVE_ONTO_RING,))
+        return Transition(State.RELOCALIZING)
 
     # STOPPING, FAULT, DONE are terminal w.r.t. the machine: settle to DONE.
     return Transition(State.DONE)
@@ -241,6 +266,9 @@ class SessionRecord:
     fault_info: str | None = None
     recenter_count: int = 0   # mid-RUNNING drift re-centerings; recenters/lap = loop-tightness health
     stop_count: int = 0  # planned/observed halts during RUNNING (e.g. stop lines)
+    relocalize_count: int = 0       # divergence-triggered NDT re-inits (ndt mode)
+    divergence_max_m: float = 0.0   # worst observed translation divergence
+    divergence_mean_m: float = 0.0  # mean translation divergence over the run
 
     def to_json(self) -> str:
         def _default(obj: object) -> object:

@@ -7,7 +7,7 @@
   <arg name="vehicle_info_param_file"
        default="$(find-pkg-share kachaka_autoware_description)/config/vehicle_info.param.yaml"/>
   <arg name="launch_planning" default="false"
-       description="Bring up the lanelet map + autoware_core_planning + INITIALIZED state. Requires map_path to contain a generated loop map."/>
+       description="Bring up the lanelet map + autoware_core_planning + INITIALIZED state. Requires map_path to contain a generated loop map. localization_mode:=shadow|ndt require launch_planning:=true (the pointcloud map loader rides this group)."/>
   <arg name="launch_api" default="false"
        description="Bring up AD-API (default_adapi + rviz_adaptors) for routing."/>
   <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
@@ -16,18 +16,90 @@
        description="Open RViz with the stock 2D driving config (Set Goal tool -> routing)."/>
   <arg name="rviz_config" default="$(find-pkg-share kachaka_autoware_bridge)/rviz/kachaka_autoware_2d.rviz"
        description="RViz config path."/>
+  <arg name="localization_mode" default="kachaka"
+       description="kachaka: Kachaka SLAM TF passthrough (M1-M6 stack, no LiDAR needed).
+                    shadow: passthrough still drives; NDT+EKF run namespaced under
+                    /localization/shadow with no TF output, localization_monitor logs divergence.
+                    ndt: NDT+EKF own map->odom (Task 12). shadow/ndt require launch_planning:=true
+                    (the pointcloud map loader rides the map group) and the OS-1 mounted.
+                    shadow/ndt also require launch_control:=true (the EKF's twist comes from the vehicle interface in that group)."/>
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname/IP (shadow/ndt modes only)."/>
+  <let name="loc_shadow" value="$(eval &quot;'$(var localization_mode)'=='shadow'&quot;)"/>
+  <let name="loc_ndt" value="$(eval &quot;'$(var localization_mode)'=='ndt'&quot;)"/>
+  <let name="loc_lidar" value="$(eval &quot;'$(var localization_mode)'!='kachaka'&quot;)"/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
-  <include file="$(find-pkg-share kachaka_grpc_ros2_bridge)/launch/grpc_ros2_bridge.launch.xml">
+  <!-- Vendored bridge launch: identical to upstream except dynamic TF lands on
+       /kachaka/tf_raw; tf_gate forwards it to /tf (dropping map->odom in ndt
+       mode so the EKF-derived edge can own it). One launch path for all
+       localization modes.
+       In ndt mode tf_gate drops map->odom and the map_to_odom_adapter publishes
+       it once the EKF converges; until then /tf has odom->base_footprint but no
+       map->odom, so map->base lookups fail until initialization completes (an
+       expected, bounded startup window, not a fault). -->
+  <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_grpc_bridge_core.launch.xml">
     <arg name="server_uri" value="$(var server_uri)"/>
     <arg name="namespace" value="kachaka"/>
     <arg name="frame_prefix" value=""/>
   </include>
+  <node pkg="kachaka_autoware_bridge" exec="tf_gate" name="tf_gate" output="both">
+    <param name="input_topic" value="/kachaka/tf_raw"/>
+    <param name="drop_edges" value="$(eval &quot;'map:odom' if '$(var localization_mode)'=='ndt' else ''&quot;)"/>
+  </node>
 
   <!-- Localization: republish Kachaka SLAM pose as /localization/kinematic_state.
-       No NDT / EKF / pointcloud map: Kachaka already publishes map -> odom. -->
-  <include file="$(find-pkg-share kachaka_autoware_localization)/launch/localization.launch.xml"/>
+       No NDT / EKF / pointcloud map: Kachaka already publishes map -> odom.
+       Skipped in ndt mode (Task 12 NDT+EKF takes over map->odom instead). -->
+  <include file="$(find-pkg-share kachaka_autoware_localization)/launch/localization.launch.xml"
+           unless="$(var loc_ndt)"/>
+
+  <!-- 3D LiDAR pipeline (shadow/ndt): OS-1 driver + relays, and the
+       vehicle-velocity twist source the EKF consumes. -->
+  <group if="$(var loc_lidar)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/sensor_ouster.launch.xml">
+      <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
+    </include>
+    <include file="$(find-pkg-share autoware_core_sensing)/launch/autoware_core_sensing.launch.xml"/>
+  </group>
+
+  <!-- SHADOW localization: full NDT+EKF stack namespaced under
+       /localization/shadow, EKF TF remapped away (it would give base_link a
+       second parent), divergence measured against the passthrough. -->
+  <group if="$(var loc_shadow)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_localization_core.launch.xml">
+      <arg name="ns" value="/localization/shadow"/>
+      <arg name="ekf_tf_topic" value="/localization/shadow/tf_unused"/>
+    </include>
+    <node pkg="kachaka_autoware_bridge" exec="localization_monitor" name="localization_monitor" output="both">
+      <param name="mode" value="shadow"/>
+      <param name="reference_odom_topic" value="/localization/kinematic_state"/>
+      <param name="estimate_odom_topic" value="/localization/shadow/kinematic_state"/>
+      <param name="initialize_service" value="/localization/shadow/initialize"/>
+      <param name="auto_initialize" value="true"/>
+    </node>
+  </group>
+
+  <!-- NDT localization owns the stack: real namespace (/localization/...),
+       EKF TF still remapped away (the adapter owns map->odom; the tf_gate
+       drops Kachaka's), passthrough + INITIALIZED stub + twist2accel stub all
+       replaced by the real components. Kachaka SLAM stays available on
+       /kachaka/tf_raw as the monitor's reference and the recovery seed. -->
+  <group if="$(var loc_ndt)">
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/_localization_core.launch.xml">
+      <arg name="ns" value="/localization"/>
+      <arg name="ekf_tf_topic" value="/localization/tf_unused"/>
+    </include>
+    <node pkg="kachaka_autoware_bridge" exec="map_to_odom_adapter" name="map_to_odom_adapter" output="both"/>
+    <node pkg="kachaka_autoware_bridge" exec="localization_monitor" name="localization_monitor" output="both">
+      <param name="mode" value="ndt"/>
+      <param name="estimate_odom_topic" value="/localization/kinematic_state"/>
+      <param name="kachaka_tf_topic" value="/kachaka/tf_raw"/>
+      <param name="initialize_service" value="/localization/initialize"/>
+      <param name="auto_initialize" value="true"/>
+    </node>
+  </group>
 
   <!-- Control + Vehicle Interface (M2). simple_pure_pursuit consumes
        /localization/kinematic_state + /planning/trajectory and publishes
@@ -49,11 +121,14 @@
   <group if="$(var launch_planning)">
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/map.launch.xml">
       <arg name="map_path" value="$(var map_path)"/>
+      <arg name="launch_pointcloud_map" value="$(var loc_lidar)"/>
     </include>
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/planning.launch.xml">
       <arg name="vehicle_info_param_file" value="$(var vehicle_info_param_file)"/>
+      <arg name="launch_twist2accel" value="$(eval &quot;not $(var loc_ndt)&quot;)"/>
     </include>
-    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"/>
+    <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/initialization_state.launch.xml"
+             unless="$(var loc_ndt)"/>
   </group>
 
   <!-- AD-API (M3/M4): routing + localization + interface adapters.

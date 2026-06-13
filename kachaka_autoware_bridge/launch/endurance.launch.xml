@@ -7,6 +7,10 @@
   <arg name="max_duration_sec" default="0.0"
        description="Built-in DURATION stop after N seconds; 0 = rely on SP4/operator."/>
   <arg name="launch_rviz" default="false"/>
+  <arg name="localization_mode" default="kachaka"
+       description="Forwarded to kachaka_autoware_2d.launch.xml (kachaka | shadow | ndt)."/>
+  <arg name="sensor_hostname" default="os-sensor.local"
+       description="Ouster OS-1 hostname/IP; forwarded to kachaka_autoware_2d (shadow/ndt modes only)."/>
 
   <!-- Full M1-M4 stock stack: bridge + localization + control + planning + AD-API. -->
   <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/kachaka_autoware_2d.launch.xml">
@@ -16,6 +20,8 @@
     <arg name="launch_api" value="true"/>
     <arg name="launch_rviz" value="$(var launch_rviz)"/>
     <arg name="map_path" value="$(var map_path)"/>
+    <arg name="localization_mode" value="$(var localization_mode)"/>
+    <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
   </include>
 
   <!-- Endurance orchestrator. -->
@@ -24,5 +30,9 @@
     <param name="loop_params_path" value="$(var map_path)/loop_params.yaml"/>
     <param name="seed" value="$(var seed)"/>
     <param name="max_duration_sec" value="$(var max_duration_sec)"/>
+    <param name="divergence_topic"
+           value="$(eval &quot;'/localization_monitor/divergence' if '$(var localization_mode)' != 'kachaka' else ''&quot;)"/>
+    <param name="divergence_drives_recovery"
+           value="$(eval &quot;'$(var localization_mode)' == 'ndt'&quot;)"/>
   </node>
 </launch>

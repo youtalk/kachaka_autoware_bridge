@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+# Copyright 2026 Yutaka Kondo
+# Licensed under the Apache License, Version 2.0 (the "License").
+
+"""Stitch /ouster/points into a map-frame pointcloud map while the robot drives.
+
+Run alongside the kachaka_autoware_2d stack in localization_mode:=kachaka
+(Kachaka SLAM owns map->odom; its TF is the stitching reference). Drive the
+loop slowly for 2-3 laps (e.g. endurance.launch.xml), then SIGINT this node:
+it writes pointcloud_map.pcd + pointcloud_map/metadata.yaml (and any missing
+sidecars) into output_dir on exit. Loop stitching instead of a stationary
+snapshot: occlusion shadows behind furniture leave holes that destabilize NDT.
+"""
+
+import signal
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import rclpy
+import rclpy.time
+import tf2_ros
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+
+from kachaka_autoware_maps.pcd_io import write_pcd_binary
+from kachaka_autoware_maps.sidecars import write_sidecars_if_absent
+from kachaka_autoware_maps.stitcher import CloudStitcher
+
+DEFAULT_INPUT_TOPIC = "/ouster/points"
+DEFAULT_OUTPUT_DIR = str(Path.home() / "maps" / "kachaka_loop")
+DEFAULT_TARGET_FRAME = "map"
+# Match snapshot_map: the first OS-1 frames after handshake have an elevated
+# NaN ratio while UDP buffers warm up.
+DEFAULT_WARMUP_SKIP_FRAMES = 5
+TF_TIMEOUT_SEC = 0.2
+
+
+def _tf_to_matrix(transform_stamped):
+    """Return (R 3x3, t 3) from a geometry_msgs/TransformStamped."""
+    t = transform_stamped.transform.translation
+    q = transform_stamped.transform.rotation
+    qx, qy, qz, qw = q.x, q.y, q.z, q.w
+    # Right-handed quaternion to rotation matrix.
+    r = np.array(
+        [
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+        ],
+        dtype=np.float32,
+    )
+    return r, np.array([t.x, t.y, t.z], dtype=np.float32)
+
+
+class StitchMapNode(Node):
+    def __init__(self) -> None:
+        super().__init__("stitch_map")
+        self.declare_parameter("input_topic", DEFAULT_INPUT_TOPIC)
+        self.declare_parameter("output_dir", DEFAULT_OUTPUT_DIR)
+        self.declare_parameter("target_frame", DEFAULT_TARGET_FRAME)
+        self.declare_parameter("voxel_size", 0.05)
+        self.declare_parameter("min_range", 0.8)
+        self.declare_parameter("max_range", 20.0)
+        self.declare_parameter("keyframe_translation", 0.15)
+        self.declare_parameter("keyframe_yaw", 0.2)
+        self.declare_parameter("capture_duration", 0.0)  # 0 = run until SIGINT
+        self.declare_parameter("warmup_skip_frames", DEFAULT_WARMUP_SKIP_FRAMES)
+
+        self.input_topic = str(self.get_parameter("input_topic").value)
+        self.output_dir = Path(str(self.get_parameter("output_dir").value)).expanduser()
+        self.target_frame = str(self.get_parameter("target_frame").value)
+        self.capture_duration = float(self.get_parameter("capture_duration").value)
+        self.warmup_skip_frames = max(0, int(self.get_parameter("warmup_skip_frames").value))
+        self.stitcher = CloudStitcher(
+            voxel_size=float(self.get_parameter("voxel_size").value),
+            min_range=float(self.get_parameter("min_range").value),
+            max_range=float(self.get_parameter("max_range").value),
+            keyframe_translation=float(self.get_parameter("keyframe_translation").value),
+            keyframe_yaw=float(self.get_parameter("keyframe_yaw").value),
+        )
+        self._frames_seen = 0
+        self._tf_misses = 0
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
+        self.create_subscription(PointCloud2, self.input_topic, self._on_cloud, sensor_qos)
+        self.get_logger().info(
+            f"Stitching {self.input_topic} into frame '{self.target_frame}'; "
+            f"will write to {self.output_dir} on exit"
+        )
+
+    def _on_cloud(self, msg: PointCloud2) -> None:
+        self._frames_seen += 1
+        if self._frames_seen <= self.warmup_skip_frames:
+            return
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.target_frame,
+                msg.header.frame_id,
+                rclpy.time.Time.from_msg(msg.header.stamp),
+                timeout=Duration(seconds=TF_TIMEOUT_SEC),
+            )
+        except tf2_ros.TransformException as exc:
+            self._tf_misses += 1
+            self.get_logger().warning(
+                f"TF {self.target_frame}<-{msg.header.frame_id} unavailable "
+                f"(miss {self._tf_misses}): {exc}",
+                throttle_duration_sec=5.0,
+            )
+            return
+        r_mat, t_vec = _tf_to_matrix(transform)
+        raw = point_cloud2.read_points(
+            msg, field_names=["x", "y", "z", "intensity"], skip_nans=True
+        )
+        xyzi = np.asarray(raw.tolist(), dtype=np.float32)
+        added = self.stitcher.add_cloud(xyzi.reshape(-1, 4), r_mat, t_vec)
+        if added:
+            self.get_logger().info(
+                f"frame {self.stitcher.n_frames_added}: +{added} voxels "
+                f"(total {self.stitcher.n_points})",
+                throttle_duration_sec=2.0,
+            )
+
+    def write_map(self) -> int:
+        if self.stitcher.n_points == 0:
+            self.get_logger().error("no points accumulated; not writing a map")
+            return 3
+        pcd_path = self.output_dir / "pointcloud_map.pcd"
+        write_pcd_binary(pcd_path, self.stitcher.points())
+        write_sidecars_if_absent(self.output_dir)
+        self.get_logger().info(
+            f"Wrote {self.stitcher.n_points} points "
+            f"({self.stitcher.n_frames_added} keyframes, {self._tf_misses} TF misses) "
+            f"to {pcd_path}"
+        )
+        return 0
+
+
+def main() -> int:
+    # Own the signals (rclpy's handler would tear the context down before the
+    # finally-block map write) -- same pattern as run_endurance.
+    try:
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    except (ImportError, TypeError):
+        rclpy.init()
+    shutdown = {"requested": False}
+
+    def _request_shutdown(_signum, _frame) -> None:
+        shutdown["requested"] = True
+
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    node = StitchMapNode()
+    try:
+        deadline = (
+            time.monotonic() + node.capture_duration if node.capture_duration > 0.0 else None
+        )
+        while rclpy.ok() and not shutdown["requested"]:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            rclpy.spin_once(node, timeout_sec=0.1)
+        return node.write_map()
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

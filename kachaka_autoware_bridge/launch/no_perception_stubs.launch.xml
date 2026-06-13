@@ -8,7 +8,9 @@
 
     1. /localization/acceleration (geometry_msgs/AccelWithCovarianceStamped) -
        a localization output (design section 6.3) normally produced by the EKF.
-       Here autoware_twist2accel derives it from /localization/kinematic_state.
+       autoware_twist2accel derives it from /localization/kinematic_state when
+       launch_twist2accel is true (kachaka/shadow modes); in ndt mode the
+       localization core's EKF publishes it directly and twist2accel is skipped.
     2. /perception/object_recognition/objects + /perception/obstacle_segmentation/
        pointcloud - perception_stub publishes empty messages (design section 7).
 
@@ -19,7 +21,11 @@
   localization/perception come online.
 -->
 <launch>
-  <node pkg="autoware_twist2accel" exec="autoware_twist2accel_node" name="twist2accel" output="both">
+  <arg name="launch_twist2accel" default="true"
+       description="false in ndt localization mode: the real localization core publishes /localization/acceleration itself."/>
+
+  <node pkg="autoware_twist2accel" exec="autoware_twist2accel_node" name="twist2accel" output="both"
+        if="$(var launch_twist2accel)">
     <param name="use_odom" value="true"/>
     <param name="accel_lowpass_gain" value="0.9"/>
     <remap from="input/odom" to="/localization/kinematic_state"/>

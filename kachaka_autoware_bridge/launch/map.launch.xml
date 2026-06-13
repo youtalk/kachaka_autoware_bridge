@@ -2,11 +2,11 @@
 <launch>
   <!--
     Lanelet-only map bring-up for the stock (no 3D LiDAR) path. The upstream
-    autoware_core_map.launch.xml always starts autoware_pointcloud_map_loader,
-    which the stock path has no .pcd for, so this launch starts only the
-    lanelet2 loader + projection loader + visualizer. lanelet2_map_loader
-    publishes /map/vector_map (the visualizer remaps input/lanelet2_map ->
-    vector_map inside the 'map' namespace), exactly what planning consumes.
+    autoware_core_map.launch.xml always starts autoware_pointcloud_map_loader;
+    here it is opt-in via launch_pointcloud_map (default false) so the stock
+    path needs no .pcd. lanelet2_map_loader publishes /map/vector_map (the
+    visualizer remaps input/lanelet2_map -> vector_map inside the 'map'
+    namespace), exactly what planning consumes.
     Re-sync the node list / param paths / allow_substs variable names with autoware_core_map when it is bumped.
   -->
   <arg name="map_path" default="$(env HOME)/maps/kachaka_loop"
@@ -17,9 +17,28 @@
        default="$(find-pkg-share autoware_core_map)/config/lanelet2_map_loader.param.yaml"/>
   <arg name="map_projection_loader_param_path"
        default="$(find-pkg-share autoware_core_map)/config/map_projection_loader.param.yaml"/>
+  <arg name="launch_pointcloud_map" default="false"
+       description="Also start autoware_pointcloud_map_loader (shadow/ndt localization modes). Requires pointcloud_map.pcd + pointcloud_map/metadata.yaml in map_path (see kachaka_autoware_maps stitch_map)."/>
+  <arg name="pointcloud_map_path" default="$(var map_path)/pointcloud_map.pcd"/>
+  <arg name="pointcloud_map_metadata_path" default="$(var map_path)/pointcloud_map/metadata.yaml"/>
+  <arg name="pointcloud_map_loader_param_path"
+       default="$(find-pkg-share autoware_core_map)/config/pointcloud_map_loader.param.yaml"/>
 
   <group>
     <push-ros-namespace namespace="map"/>
+
+    <node pkg="autoware_map_loader" exec="autoware_pointcloud_map_loader" name="pointcloud_map_loader"
+          if="$(var launch_pointcloud_map)">
+      <param from="$(var pointcloud_map_loader_param_path)" allow_substs="true"/>
+      <param name="pcd_paths_or_directory" value="[$(var pointcloud_map_path)]"/>
+      <param name="pcd_metadata_path" value="$(var pointcloud_map_metadata_path)"/>
+      <remap from="output/pointcloud_map" to="pointcloud_map"/>
+      <remap from="output/pointcloud_map_metadata" to="pointcloud_map_metadata"/>
+      <remap from="output/debug/downsampled_pointcloud_map" to="debug/downsampled_pointcloud_map"/>
+      <remap from="service/get_partial_pcd_map" to="/map/get_partial_pointcloud_map"/>
+      <remap from="service/get_differential_pcd_map" to="/map/get_differential_pointcloud_map"/>
+      <remap from="service/get_selected_pcd_map" to="/map/get_selected_pointcloud_map"/>
+    </node>
 
     <node pkg="autoware_map_loader" exec="autoware_lanelet2_map_loader" name="lanelet2_map_loader">
       <param from="$(var lanelet2_map_loader_param_path)" allow_substs="true"/>
