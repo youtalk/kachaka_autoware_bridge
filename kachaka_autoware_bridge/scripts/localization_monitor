@@ -32,7 +32,7 @@ import time
 import rclpy
 import rclpy.time
 import tf2_ros
-from autoware_internal_localization_msgs.srv import InitializeLocalization
+from autoware_localization_msgs.srv import InitializeLocalization
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import PoseWithCovarianceStamped, Vector3Stamped
 from nav_msgs.msg import Odometry
@@ -74,11 +74,12 @@ class LocalizationMonitor(Node):
         if self.mode not in ("shadow", "ndt"):
             raise ValueError(f"mode must be shadow|ndt, got {self.mode!r}")
         self.publish_period = float(self.get_parameter("publish_period").value)
+        self._stale_sec = float(self.get_parameter("stale_sec").value)
         self._tracker = HealthTracker(
             HealthConfig(
                 translation_threshold_m=float(self.get_parameter("translation_threshold_m").value),
                 yaw_threshold_rad=float(self.get_parameter("yaw_threshold_rad").value),
-                stale_sec=float(self.get_parameter("stale_sec").value),
+                stale_sec=self._stale_sec,
             )
         )
 
@@ -88,6 +89,11 @@ class LocalizationMonitor(Node):
         self._kachaka_map_odom: tuple[tuple, tuple, float] | None = None
         self._init_requested = bool(self.get_parameter("auto_initialize").value)
         self._init_done_once = False
+        # In-flight InitializeLocalization future (None when idle). The call is
+        # polled across ticks instead of blocked on, so the divergence feed
+        # keeps publishing during a re-seed.
+        self._init_future = None
+        self._init_deadline = 0.0
 
         est_topic = str(self.get_parameter("estimate_odom_topic").value)
         self.create_subscription(Odometry, est_topic, self._on_estimate, 10)
@@ -157,8 +163,26 @@ class LocalizationMonitor(Node):
         return resp
 
     def _try_initialize(self) -> None:
-        """Run a scheduled initialize from the main loop (never from a service
-        callback). Keeps the request flag on failure so the next tick retries."""
+        """Drive a scheduled initialize WITHOUT blocking the main loop. The
+        previous spin_until_future_complete froze the divergence feed for up to
+        SERVICE_TIMEOUT_SEC during a re-seed, which the endurance feed watchdog
+        then mistook for a dead monitor. Instead fire the call once and poll the
+        future on later ticks (the main loop's spin_once delivers the response);
+        the request flag stays set until success so the next tick retries."""
+        if self._init_future is not None:
+            if not self._init_future.done():
+                if time.monotonic() > self._init_deadline:
+                    self.get_logger().warning("initialize call timed out; will retry")
+                    self._init_future = None
+                return
+            result = self._init_future.result()
+            self._init_future = None
+            ok = result is not None and result.status.success
+            self.get_logger().info(f"initialize call: {'ok' if ok else 'FAILED'}")
+            if ok:
+                self._init_requested = False
+                self._init_done_once = True
+            return
         if self._ref is None:
             self.get_logger().warning(
                 "reinitialize pending but no reference pose received yet",
@@ -184,14 +208,8 @@ class LocalizationMonitor(Node):
         req = InitializeLocalization.Request()
         req.pose_with_covariance = [pose]
         req.method = InitializeLocalization.Request.AUTO
-        fut = self.init_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=SERVICE_TIMEOUT_SEC)
-        result = fut.result()
-        ok = result is not None and result.status.success
-        self.get_logger().info(f"initialize call: {'ok' if ok else 'FAILED'}")
-        if ok:
-            self._init_requested = False
-            self._init_done_once = True
+        self._init_future = self.init_cli.call_async(req)
+        self._init_deadline = time.monotonic() + SERVICE_TIMEOUT_SEC
 
     # ---- periodic output ----
     def tick(self) -> None:
@@ -202,13 +220,22 @@ class LocalizationMonitor(Node):
         now = time.monotonic()
         if self._ref is None or self._est is None:
             return
-        ref_t, ref_q, _ = self._ref
+        ref_t, ref_q, ref_stamp = self._ref
         est_t, est_q, est_stamp = self._est
         trans, yaw = divergence(
             PoseSample(ref_t[0], ref_t[1], quat_to_yaw(ref_q)),
             PoseSample(est_t[0], est_t[1], quat_to_yaw(est_q)),
         )
         est_age = now - est_stamp
+        # A stale reference is as untrustworthy as a stale estimate: in ndt mode
+        # the reference composes a possibly-frozen Kachaka map->odom with live
+        # wheel odometry, so a dead SLAM feed produces a confident-looking
+        # reference that drifts with the wheels. Emit NaN divergence so this
+        # tracker AND the endurance orchestrator's tracker (fed via the feed)
+        # treat it as bad -- no false recovery, no masked real divergence.
+        ref_age = now - ref_stamp
+        if ref_age > self._stale_sec:
+            trans = yaw = float("nan")
         unhealthy = self._tracker.update(trans, yaw, est_age)
 
         out = Vector3Stamped()
