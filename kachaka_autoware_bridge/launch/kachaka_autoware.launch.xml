@@ -33,6 +33,14 @@
   <let name="loc_ndt" value="$(eval &quot;'$(var localization_mode)'=='ndt'&quot;)"/>
   <let name="loc_lidar" value="$(eval &quot;'$(var localization_mode)'!='kachaka'&quot;)"/>
   <let name="run_shelf" value="$(eval &quot;'$(var with_shelf)'=='true' or '$(var localization_mode)'!='kachaka'&quot;)"/>
+  <let name="planning_on" value="$(eval &quot;'$(var launch_planning)'.lower() in ('true', '1')&quot;)"/>
+  <!-- ndt owns map->odom only when its replacement chain is actually launched:
+       the pointcloud_map_loader NDT needs rides the launch_planning group, so
+       without planning the NDT/EKF can never converge and the adapter never
+       publishes. Relinquish Kachaka's map->odom only when planning is on; a
+       mis-launched ndt-without-planning then degrades to the Kachaka passthrough
+       (intact TF tree) instead of an unowned map->odom (dead robot). -->
+  <let name="ndt_owns_map_odom" value="$(eval &quot;$(var loc_ndt) and $(var planning_on)&quot;)"/>
 
   <!-- Kachaka gRPC bridge (also launches the Kachaka body URDF /
        robot_state_publisher, which provides base_footprint -> base_link). -->
@@ -51,7 +59,7 @@
   </include>
   <node pkg="kachaka_autoware_bridge" exec="tf_gate" name="tf_gate" output="both">
     <param name="input_topic" value="/kachaka/tf_raw"/>
-    <param name="drop_edges" value="$(eval &quot;'map:odom' if '$(var localization_mode)'=='ndt' else ''&quot;)"/>
+    <param name="drop_edges" value="$(eval &quot;'map:odom' if $(var ndt_owns_map_odom) else ''&quot;)"/>
   </node>
 
   <!-- Localization: republish Kachaka SLAM pose as /localization/kinematic_state.
