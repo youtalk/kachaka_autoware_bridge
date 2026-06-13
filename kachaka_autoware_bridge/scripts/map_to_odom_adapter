@@ -21,7 +21,6 @@ import rclpy.time
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
-from rclpy.duration import Duration
 from rclpy.node import Node
 
 from kachaka_autoware_bridge.se3 import map_to_odom
@@ -47,20 +46,28 @@ class MapToOdomAdapter(Node):
         self.get_logger().info("map_to_odom_adapter up")
 
     def _on_odom(self, msg: Odometry) -> None:
+        # Sample odom->base at the EKF stamp so map->odom is composed from
+        # time-consistent factors and the broadcast stamp matches the data it
+        # was built from (a latest-time lookup back-dated to the EKF stamp
+        # injects a motion-correlated error during fast rotation). tf2
+        # interpolates within the buffer; if the EKF stamp leads the wheel-odom
+        # buffer, fall back to the latest transform (the sub-tick mismatch is
+        # far below the divergence thresholds). Neither lookup blocks the
+        # callback.
+        stamp = rclpy.time.Time.from_msg(msg.header.stamp)
         try:
-            # Latest odom->base rather than stamp-matched: wheel odometry runs
-            # much faster than the EKF output, and the sub-tick mismatch is far
-            # below the divergence thresholds that matter here.
-            tr = self.tf_buffer.lookup_transform(
-                self.odom_frame, self.base_frame, rclpy.time.Time(),
-                timeout=Duration(seconds=0.1),
-            )
-        except tf2_ros.TransformException as exc:
-            self.get_logger().warning(
-                f"{self.odom_frame}->{self.base_frame} TF unavailable: {exc}",
-                throttle_duration_sec=5.0,
-            )
-            return
+            tr = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame, stamp)
+        except tf2_ros.TransformException:
+            try:
+                tr = self.tf_buffer.lookup_transform(
+                    self.odom_frame, self.base_frame, rclpy.time.Time()
+                )
+            except tf2_ros.TransformException as exc:
+                self.get_logger().warning(
+                    f"{self.odom_frame}->{self.base_frame} TF unavailable: {exc}",
+                    throttle_duration_sec=5.0,
+                )
+                return
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
         ob_t = (tr.transform.translation.x, tr.transform.translation.y, tr.transform.translation.z)
         ob_q = (tr.transform.rotation.x, tr.transform.rotation.y,
