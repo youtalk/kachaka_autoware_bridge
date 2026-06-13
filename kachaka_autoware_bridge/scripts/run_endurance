@@ -480,6 +480,14 @@ class EnduranceNode(Node):
     def _update_laps(self) -> None:
         if self.latest_odom is None:
             return
+        # A relocalize re-seed teleports the map->base pose; accumulating across
+        # that discontinuity would fold the jump into lap_accum_len (corrupting
+        # lap counts and step-extent gating). Skip accumulation while
+        # RELOCALIZING and drop the baseline so the first post-recovery tick
+        # re-bases from the corrected pose instead of spanning the jump.
+        if self.state is State.RELOCALIZING:
+            self._prev_s = None
+            return
         x, y, _ = self._pose()
         s, _ = self.centerline.project(x, y)
         # centerline_progress uses the shortest signed arc, correct while the
