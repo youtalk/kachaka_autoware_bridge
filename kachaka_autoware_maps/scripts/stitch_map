@@ -30,6 +30,7 @@ from sensor_msgs_py import point_cloud2
 from kachaka_autoware_maps.pcd_io import write_pcd_binary
 from kachaka_autoware_maps.sidecars import write_sidecars_if_absent
 from kachaka_autoware_maps.stitcher import CloudStitcher
+from kachaka_autoware_maps.transforms import tf_to_matrix
 
 DEFAULT_INPUT_TOPIC = "/ouster/points"
 DEFAULT_OUTPUT_DIR = str(Path.home() / "maps" / "kachaka_loop")
@@ -38,23 +39,6 @@ DEFAULT_TARGET_FRAME = "map"
 # NaN ratio while UDP buffers warm up.
 DEFAULT_WARMUP_SKIP_FRAMES = 5
 TF_TIMEOUT_SEC = 0.2
-
-
-def _tf_to_matrix(transform_stamped):
-    """Return (R 3x3, t 3) from a geometry_msgs/TransformStamped."""
-    t = transform_stamped.transform.translation
-    q = transform_stamped.transform.rotation
-    qx, qy, qz, qw = q.x, q.y, q.z, q.w
-    # Right-handed quaternion to rotation matrix.
-    r = np.array(
-        [
-            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
-            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
-            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
-        ],
-        dtype=np.float32,
-    )
-    return r, np.array([t.x, t.y, t.z], dtype=np.float32)
 
 
 class StitchMapNode(Node):
@@ -119,7 +103,7 @@ class StitchMapNode(Node):
                 throttle_duration_sec=5.0,
             )
             return
-        r_mat, t_vec = _tf_to_matrix(transform)
+        r_mat, t_vec = tf_to_matrix(transform)
         raw = point_cloud2.read_points(
             msg, field_names=["x", "y", "z", "intensity"], skip_nans=True
         )

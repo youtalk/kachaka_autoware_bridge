@@ -82,10 +82,17 @@ class CloudStitcher:
             translation, dtype=np.float32
         )
         keys = np.floor(xyz_map.astype(np.float64) / self._voxel_size).astype(np.int64)
+        # Collapse same-voxel points in C: np.unique returns each distinct key
+        # once with the index of its FIRST occurrence, so the kept point matches
+        # the old "first point per voxel" loop. The remaining loop runs over
+        # unique voxels (bounded by the grid) rather than every raw point.
+        uniq_keys, first_idx = np.unique(keys, axis=0, return_index=True)
         added = 0
-        for key, p, intensity in zip(map(tuple, keys), xyz_map, pts[:, 3]):
+        for row, idx in zip(uniq_keys, first_idx):
+            key = (int(row[0]), int(row[1]), int(row[2]))
             if key not in self._voxels:
-                self._voxels[key] = (float(p[0]), float(p[1]), float(p[2]), float(intensity))
+                p = xyz_map[idx]
+                self._voxels[key] = (float(p[0]), float(p[1]), float(p[2]), float(pts[idx, 3]))
                 added += 1
         return added
 

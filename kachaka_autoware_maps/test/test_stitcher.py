@@ -86,6 +86,37 @@ def test_voxel_dedupe_keeps_one_point_per_voxel() -> None:
     assert st.n_points == 2
 
 
+def test_voxel_dedupe_earlier_frame_wins_across_calls() -> None:
+    # A voxel hit by an earlier keyframe must keep the earlier point/intensity;
+    # a later frame landing in the same voxel adds nothing (added == 0).
+    st = CloudStitcher(voxel_size=0.1, min_range=0.0, max_range=100.0)
+    r, _ = _identity()
+    assert st.add_cloud(np.array([[5.0, 0.0, 0.0, 1.0]], dtype=np.float32), r,
+                        np.zeros(3, dtype=np.float32)) == 1
+    # Move past the keyframe gate, but aim the point at the SAME map voxel
+    # (sensor 4.5 + translation 0.5 -> map 5.0) with a different intensity.
+    t2 = np.array([0.5, 0.0, 0.0], dtype=np.float32)
+    assert st.add_cloud(np.array([[4.5, 0.0, 0.0, 9.0]], dtype=np.float32), r, t2) == 0
+    pts = st.points()
+    assert len(pts) == 1
+    assert pts[0][3] == pytest.approx(1.0)  # earlier frame's intensity retained
+
+
+def test_voxel_dedupe_keeps_first_point_within_a_frame() -> None:
+    # Within one cloud, two points in the same voxel keep the FIRST one.
+    st = CloudStitcher(voxel_size=0.1, min_range=0.0, max_range=100.0)
+    r, t = _identity()
+    cloud = np.array(
+        [
+            [5.00, 0.0, 0.0, 1.0],
+            [5.03, 0.0, 0.0, 2.0],  # same 0.1 m voxel; must not overwrite
+        ],
+        dtype=np.float32,
+    )
+    assert st.add_cloud(cloud, r, t) == 1
+    assert st.points()[0][3] == pytest.approx(1.0)
+
+
 def test_transform_is_applied_before_voxelization() -> None:
     st = CloudStitcher(voxel_size=0.1, min_range=0.0, max_range=100.0)
     # Sensor at (10, 0) rotated +90 deg: sensor-frame (2, 0) -> map (10, 2).
