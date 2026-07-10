@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- Map-stitching capture. PRECONDITION: the kachaka_autoware_2d stack is
+  <!-- Map-stitching capture. PRECONDITION: the kachaka_autoware stack is
        already running in localization_mode:=kachaka (Kachaka SLAM publishes
        map->odom->base_footprint TF, which this capture stitches against).
        This launch adds only the OS-1 driver, the shelf URDF (base_link ->

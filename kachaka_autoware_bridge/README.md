@@ -11,7 +11,7 @@ Kachaka reachable (verify the DHCP IP; default `192.168.1.101:26400`).
    only spins off-dock):
 
    ```bash
-   ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
+   ros2 launch kachaka_autoware_bridge kachaka_autoware.launch.xml \
      server_uri:=192.168.1.101:26400 launch_control:=false
    ```
 
@@ -30,7 +30,7 @@ Kachaka reachable (verify the DHCP IP; default `192.168.1.101:26400`).
    RViz):
 
    ```bash
-   ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
+   ros2 launch kachaka_autoware_bridge kachaka_autoware.launch.xml \
      server_uri:=192.168.1.101:26400 \
      launch_control:=true launch_planning:=true launch_api:=true launch_rviz:=true \
      map_path:=$HOME/maps/kachaka_loop

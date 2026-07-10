@@ -4,7 +4,7 @@
 
 """Stitch /ouster/points into a map-frame pointcloud map while the robot drives.
 
-Run alongside the kachaka_autoware_2d stack in localization_mode:=kachaka
+Run alongside the kachaka_autoware stack in localization_mode:=kachaka
 (Kachaka SLAM owns map->odom; its TF is the stitching reference). Drive the
 loop slowly for 2-3 laps (e.g. endurance.launch.xml), then SIGINT this node:
 it writes pointcloud_map.pcd + pointcloud_map/metadata.yaml (and any missing

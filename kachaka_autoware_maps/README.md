@@ -56,7 +56,7 @@ Then bring up the integrated stack with the throwaway map
 (`localization_mode:=ndt` runs NDT+EKF against the pointcloud map):
 
 ```bash
-ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
+ros2 launch kachaka_autoware_bridge kachaka_autoware.launch.xml \
   server_uri:=192.168.1.101:26400 localization_mode:=ndt \
   launch_planning:=true launch_control:=true \
   sensor_hostname:=os-122609004411.local \
@@ -131,7 +131,7 @@ chatters on the arcs.
 Then bring up planning against it:
 
 ```bash
-ros2 launch kachaka_autoware_bridge kachaka_autoware_2d.launch.xml \
+ros2 launch kachaka_autoware_bridge kachaka_autoware.launch.xml \
   server_uri:=192.168.1.101:26400 \
   launch_planning:=true launch_api:=true \
   map_path:=$HOME/maps/kachaka_loop
