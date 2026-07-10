@@ -61,13 +61,18 @@
            unless="$(var loc_ndt)"/>
 
   <!-- Shelf + OS-1 robot_description (TF). Runs when with_shelf, and always in
-       shadow/ndt (base_link -> os_lidar is needed by NDT). The body
-       robot_state_publisher from _grpc_bridge_core already owns base_link and the
-       body links; this superset URDF re-publishes those identical static edges
-       (benign, last-writer-wins on /tf_static) and adds the shelf/sensor mount.
-       frame_prefix empty to match the bridge. -->
+       shadow/ndt (base_link -> os_lidar is needed by NDT). Published at the ROOT
+       namespace (namespace="") so it does NOT collide with the body
+       robot_state_publisher (/kachaka/robot_state_publisher from _grpc_bridge_core):
+       a second RSP sharing that node name AND the /kachaka/robot_description topic
+       corrupts the TF tree (non-deterministic base_link->os_lidar). At root it is
+       /robot_state_publisher + /robot_description, distinct from the body's. It
+       reads no /joint_states (the body RSP owns the dynamic docking/wheel joints);
+       frame_prefix empty keeps frame_ids global so the shelf/OS-1 static edges
+       attach to the body tree. -->
   <group if="$(var run_shelf)">
     <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py">
+      <arg name="namespace" value=""/>
       <arg name="frame_prefix" value=""/>
       <arg name="with_shelf" value="true"/>
     </include>
