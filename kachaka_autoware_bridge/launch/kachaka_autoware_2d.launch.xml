@@ -58,6 +58,15 @@
   <!-- 3D LiDAR pipeline (shadow/ndt): OS-1 driver + relays, and the
        vehicle-velocity twist source the EKF consumes. -->
   <group if="$(var loc_lidar)">
+    <!-- Publish the shelf + OS-1 robot_description so base_link -> os_sensor ->
+         os_lidar TF exists for NDT. The body
+         robot_state_publisher from _grpc_bridge_core covers base_link and the body
+         links; this superset URDF re-publishes those identical static edges (benign,
+         last-writer-wins on /tf_static) and adds the shelf/sensor mount. frame_prefix
+         empty to match the bridge. -->
+    <include file="$(find-pkg-share kachaka_autoware_description)/launch/robot_description.launch.py">
+      <arg name="frame_prefix" value=""/>
+    </include>
     <include file="$(find-pkg-share kachaka_autoware_bridge)/launch/sensor_ouster.launch.xml">
       <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
     </include>
