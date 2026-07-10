@@ -7,12 +7,17 @@
   <xacro:include filename="$(find kachaka_description)/urdf/_shelf_3tier.urdf.xacro"/>
   <xacro:include filename="$(find kachaka_autoware_description)/urdf/_ouster_os1.urdf.xacro"/>
 
+  <!-- with_shelf:=false publishes the bare Kachaka body only (no 3-tier shelf,
+       no OS-1). Default true: the robot physically carries the Autoware shelf. -->
+  <xacro:arg name="with_shelf" default="true"/>
+
   <link name="base_footprint"/>
 
   <xacro:kachaka_robot parent="base_footprint">
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:kachaka_robot>
 
+  <xacro:if value="$(arg with_shelf)">
   <!--
     docking_link is Kachaka's docking lift mechanism (prismatic joint).
     The frame itself sits at base_link origin; the solenoid that supports
@@ -40,5 +45,6 @@
   <xacro:ouster_os1 parent="shelf_bottom_board" name="os">
     <origin xyz="0 0 0.015" rpy="0 0 0"/>
   </xacro:ouster_os1>
+  </xacro:if>
 
 </robot>
