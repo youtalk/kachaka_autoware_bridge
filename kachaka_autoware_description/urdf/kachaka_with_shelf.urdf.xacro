@@ -21,16 +21,24 @@
     matches the physical sensor pose. The shelf still follows the lift
     (up to +0.012 m) because docking_link is a prismatic child of base_link.
   -->
+  <!-- Yaw 180 deg (rpy 0 0 PI): the shelf + OS-1 assembly is physically mounted
+       facing the robot's rear, so flip it about Z to match reality (RViz-verified
+       2026-07-10). This rotates the mounted Ouster's extrinsic too, so the cloud
+       aligns with base_link. -->
   <xacro:shelf_3tier parent="docking_link">
-    <origin xyz="0 0 0.115" rpy="0 0 0"/>
+    <origin xyz="0 0 0.115" rpy="0 0 ${PI}"/>
   </xacro:shelf_3tier>
 
-  <!-- Mount the Ouster OS-1 at the shelf top center; override origin with values measured in M0 Task 4.
-       name="os" so URDF link names (os_sensor / os_lidar / os_imu) match the ouster_ros driver's default
-       sensor_frame / lidar_frame / imu_frame; otherwise the published cloud's frame_id is unconnected
-       to the robot TF tree and downstream NDT / snapshot tools fail to look up the transform. -->
-  <xacro:ouster_os1 parent="shelf_top" name="os">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+  <!-- Mount the Ouster OS-1 on the bottom shelf board (relocated 2026-07 from
+       shelf_top to lower the sensor to ~0.17 m above base_link, enabling ground-filter
+       experiments). shelf_bottom_board's link frame sits at the shelf base; origin z is
+       one board thickness (0.015) so the sensor body rests on the board's top surface.
+       Override origin with the M0-measured mount pose. name="os" so URDF link names
+       (os_sensor / os_lidar / os_imu) match the ouster_ros driver's default sensor_frame /
+       lidar_frame / imu_frame; otherwise the published cloud's frame_id is unconnected to
+       the robot TF tree and downstream NDT / snapshot tools fail to look up the transform. -->
+  <xacro:ouster_os1 parent="shelf_bottom_board" name="os">
+    <origin xyz="0 0 0.015" rpy="0 0 0"/>
   </xacro:ouster_os1>
 
 </robot>

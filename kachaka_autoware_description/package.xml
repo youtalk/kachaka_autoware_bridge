@@ -3,7 +3,7 @@
 <package format="3">
   <name>kachaka_autoware_description</name>
   <version>0.0.0</version>
-  <description>Composite URDF for Kachaka with the 3-tier shelf and a roof-mounted Ouster OS-1 128, plus Autoware vehicle_info parameters tuned for differential drive.</description>
+  <description>Composite URDF for Kachaka with the 3-tier shelf and a bottom-shelf-mounted Ouster OS-1 128, plus Autoware vehicle_info parameters tuned for differential drive.</description>
   <maintainer email="yutaka.kondo@youtalk.jp">Yutaka Kondo</maintainer>
   <license>Apache License 2.0</license>
   <author email="yutaka.kondo@youtalk.jp">Yutaka Kondo</author>
@@ -19,6 +19,8 @@
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
