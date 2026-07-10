@@ -14,7 +14,7 @@
        description="Directory with lanelet2_map.osm + map_projector_info.yaml (see kachaka_autoware_maps generate_loop_map)."/>
   <arg name="launch_rviz" default="false"
        description="Open RViz with the stock 2D driving config (Set Goal tool -> routing)."/>
-  <arg name="rviz_config" default="$(find-pkg-share kachaka_autoware_bridge)/rviz/kachaka_autoware_2d.rviz"
+  <arg name="rviz_config" default="$(find-pkg-share kachaka_autoware_bridge)/rviz/kachaka_autoware.rviz"
        description="RViz config path."/>
   <arg name="localization_mode" default="kachaka"
        description="kachaka: Kachaka SLAM TF passthrough (M1-M6 stack, no LiDAR needed).
