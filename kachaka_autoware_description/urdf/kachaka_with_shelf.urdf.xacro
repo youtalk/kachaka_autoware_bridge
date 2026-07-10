@@ -4,7 +4,7 @@
   <xacro:include filename="$(find kachaka_description)/urdf/_materials.urdf.xacro"/>
   <xacro:include filename="$(find kachaka_description)/urdf/_values.urdf.xacro"/>
   <xacro:include filename="$(find kachaka_description)/urdf/_kachaka.urdf.xacro"/>
-  <xacro:include filename="$(find kachaka_description)/urdf/_shelf_3tier.urdf.xacro"/>
+  <xacro:include filename="$(find kachaka_autoware_description)/urdf/_shelf_3tier.urdf.xacro"/>
   <xacro:include filename="$(find kachaka_autoware_description)/urdf/_ouster_os1.urdf.xacro"/>
 
   <!-- with_shelf:=false publishes the bare Kachaka body only (no 3-tier shelf,

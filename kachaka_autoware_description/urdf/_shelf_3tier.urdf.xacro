@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<robot name="shelf_3tier" xmlns:xacro="http://ros.org/wiki/xacro">
+  <!--
+    Vendored into kachaka_autoware_description: the 3-tier shelf is a local
+    addition that the upstream kachaka-api submodule's kachaka_description does
+    NOT ship, so kachaka_with_shelf.urdf.xacro could not expand in a clean
+    checkout / CI when it included this from $(find kachaka_description). Kept
+    here (the package that models "Kachaka + the Autoware shelf") so the
+    composite URDF is self-contained. Keep in sync if the shelf geometry changes.
+
+    Macro for the genuine Kachaka 3-tier shelf. Default dimensions are
+    approximate; the caller can override them with measured values.
+    `parent` is normally `docking_link` so the shelf follows the lift
+    mechanism.
+  -->
+  <xacro:macro name="shelf_3tier"
+               params="parent
+                       *origin
+                       shelf_name:=shelf
+                       depth:=0.32
+                       width:=0.38
+                       height:=0.50
+                       board_thickness:=0.015
+                       post_size:=0.020">
+
+    <link name="${shelf_name}_base_link"/>
+    <joint name="${shelf_name}_base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${shelf_name}_base_link"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <xacro:macro name="_shelf_board" params="board_name z">
+      <link name="${shelf_name}_${board_name}_board">
+        <visual>
+          <origin xyz="0 0 ${z + board_thickness/2.0}" rpy="0 0 0"/>
+          <geometry>
+            <box size="${depth} ${width} ${board_thickness}"/>
+          </geometry>
+          <material name="shelf_board"/>
+        </visual>
+        <collision>
+          <origin xyz="0 0 ${z + board_thickness/2.0}" rpy="0 0 0"/>
+          <geometry>
+            <box size="${depth} ${width} ${board_thickness}"/>
+          </geometry>
+        </collision>
+      </link>
+      <joint name="${shelf_name}_${board_name}_board_joint" type="fixed">
+        <parent link="${shelf_name}_base_link"/>
+        <child link="${shelf_name}_${board_name}_board"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:_shelf_board board_name="bottom" z="0"/>
+    <xacro:_shelf_board board_name="middle" z="${(height - board_thickness) / 2.0}"/>
+    <xacro:_shelf_board board_name="top"    z="${height - board_thickness}"/>
+
+    <xacro:macro name="_shelf_post" params="post_name x y">
+      <link name="${shelf_name}_${post_name}_post">
+        <visual>
+          <origin xyz="${x} ${y} ${height/2.0}" rpy="0 0 0"/>
+          <geometry>
+            <box size="${post_size} ${post_size} ${height}"/>
+          </geometry>
+          <material name="shelf_post"/>
+        </visual>
+        <collision>
+          <origin xyz="${x} ${y} ${height/2.0}" rpy="0 0 0"/>
+          <geometry>
+            <box size="${post_size} ${post_size} ${height}"/>
+          </geometry>
+        </collision>
+      </link>
+      <joint name="${shelf_name}_${post_name}_post_joint" type="fixed">
+        <parent link="${shelf_name}_base_link"/>
+        <child link="${shelf_name}_${post_name}_post"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:_shelf_post post_name="fl" x="${ (depth - post_size)/2.0}" y="${ (width - post_size)/2.0}"/>
+    <xacro:_shelf_post post_name="fr" x="${ (depth - post_size)/2.0}" y="${-(width - post_size)/2.0}"/>
+    <xacro:_shelf_post post_name="bl" x="${-(depth - post_size)/2.0}" y="${ (width - post_size)/2.0}"/>
+    <xacro:_shelf_post post_name="br" x="${-(depth - post_size)/2.0}" y="${-(width - post_size)/2.0}"/>
+
+    <link name="${shelf_name}_top"/>
+    <joint name="${shelf_name}_top_joint" type="fixed">
+      <parent link="${shelf_name}_base_link"/>
+      <child link="${shelf_name}_top"/>
+      <origin xyz="0 0 ${height}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>
