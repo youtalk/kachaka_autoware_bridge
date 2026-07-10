@@ -4,7 +4,7 @@
     VERIFICATION TOOL (M2): publish a short straight-ahead /planning/trajectory
     so the control chain (simple_pure_pursuit -> /control/command/control_cmd ->
     vehicle interface -> /kachaka/manual_control/cmd_vel) can be exercised before
-    the real planner (M3) exists. Run AFTER kachaka_autoware_2d.launch.xml is up,
+    the real planner (M3) exists. Run AFTER kachaka_autoware.launch.xml is up,
     the robot is OFF the dock, and localization is publishing. The robot only
     moves once operation mode is switched to AUTONOMOUS (change_to_autonomous).
     Keep length within the small Kachaka home map (~6.9 x 4.35 m).

@@ -32,9 +32,17 @@ def generate_launch_description():
         default_value="false",
         description="Run joint_state_publisher for offline visualization",
     )
+    with_shelf_arg = DeclareLaunchArgument(
+        "with_shelf",
+        default_value="true",
+        description="Include the 3-tier shelf + OS-1 in the description "
+        "(false = bare Kachaka body)",
+    )
 
     robot_description = {
-        "robot_description": Command(["xacro ", xacro_path]),
+        "robot_description": Command(
+            ["xacro ", xacro_path, " with_shelf:=", LaunchConfiguration("with_shelf")]
+        ),
         "frame_prefix": LaunchConfiguration("frame_prefix"),
     }
 
@@ -43,6 +51,7 @@ def generate_launch_description():
             namespace_arg,
             frame_prefix_arg,
             use_jsp_arg,
+            with_shelf_arg,
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
