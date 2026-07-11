@@ -26,12 +26,13 @@
     matches the physical sensor pose. The shelf still follows the lift
     (up to +0.012 m) because docking_link is a prismatic child of base_link.
   -->
-  <!-- Yaw 180 deg (rpy 0 0 PI): the shelf + OS-1 assembly is physically mounted
-       facing the robot's rear, so flip it about Z to match reality (RViz-verified
-       2026-07-10). This rotates the mounted Ouster's extrinsic too, so the cloud
-       aligns with base_link. -->
+  <!-- No yaw: the shelf + OS-1 assembly is mounted facing forward, aligned with
+       base_link. (An earlier rpy="0 0 PI" yaw flip was a mis-diagnosis made while
+       the OS-1 cloud was mis-timestamped and not rendering in the map frame; with
+       the cloud correctly displayed it is 180 deg off, so the flip is removed —
+       RViz-verified 2026-07-10.) -->
   <xacro:shelf_3tier parent="docking_link">
-    <origin xyz="0 0 0.115" rpy="0 0 ${PI}"/>
+    <origin xyz="0 0 0.115" rpy="0 0 0"/>
   </xacro:shelf_3tier>
 
   <!-- Mount the Ouster OS-1 on the bottom shelf board (relocated 2026-07 from
