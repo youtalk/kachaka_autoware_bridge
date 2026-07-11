@@ -4,13 +4,12 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /Map1/Status1
         - /Map1/Topic1
         - /LaserScan1/Topic1
         - /Odometry1/Shape1
-        - /MarkerArray1
         - /MarkerArray1/Topic1
         - /MarkerArray1/Namespaces1
+        - /RobotModel1/Description Topic1
       Splitter Ratio: 0.5
     Tree Height: 828
   - Class: rviz_common/Selection
@@ -52,6 +51,40 @@ Visualization Manager:
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
       Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: OusterPointCloud
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.019999999552965164
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sensing/lidar/top/pointcloud_raw_ex
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
     - Alpha: 0.699999988079071
       Binary representation: false
       Binary threshold: 100
@@ -82,6 +115,8 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
+        L01:
+          Value: true
         S01:
           Value: true
         S01_home:
@@ -103,6 +138,8 @@ Visualization Manager:
         camera_front:
           Value: true
         camera_front_link:
+          Value: true
+        charger:
           Value: true
         docking_link:
           Value: true
@@ -128,17 +165,43 @@ Visualization Manager:
           Value: true
         odom:
           Value: true
+        os_imu:
+          Value: true
+        os_lidar:
+          Value: true
+        os_sensor:
+          Value: true
+        shelf_base_link:
+          Value: true
+        shelf_bl_post:
+          Value: true
+        shelf_bottom_board:
+          Value: true
+        shelf_br_post:
+          Value: true
+        shelf_fl_post:
+          Value: true
+        shelf_fr_post:
+          Value: true
+        shelf_middle_board:
+          Value: true
+        shelf_top:
+          Value: true
+        shelf_top_board:
+          Value: true
         tof_camera:
           Value: true
         tof_link:
           Value: true
       Marker Scale: 0.5
       Name: TF
-      Show Arrows: true
+      Show Arrows: false
       Show Axes: true
       Show Names: false
       Tree:
         map:
+          L01:
+            {}
           S01:
             {}
           S01_home:
@@ -159,12 +222,33 @@ Visualization Manager:
                   {}
                 camera_back_link:
                   camera_back:
-                    {}
+                    charger:
+                      {}
                 camera_front_link:
                   camera_front:
                     {}
                 docking_link:
-                  {}
+                  shelf_base_link:
+                    shelf_bl_post:
+                      {}
+                    shelf_bottom_board:
+                      os_sensor:
+                        os_imu:
+                          {}
+                        os_lidar:
+                          {}
+                    shelf_br_post:
+                      {}
+                    shelf_fl_post:
+                      {}
+                    shelf_fr_post:
+                      {}
+                    shelf_middle_board:
+                      {}
+                    shelf_top:
+                      {}
+                    shelf_top_board:
+                      {}
                 imu_link:
                   {}
                 laser_link:
@@ -195,7 +279,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 1020
+      Max Intensity: 1016
       Min Color: 0; 0; 0
       Min Intensity: 1008
       Name: LaserScan
@@ -271,6 +355,132 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /map/vector_map_marker
       Value: true
+    - Alpha: 0.800000011920929
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        base_footprint:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        base_l_drive_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        base_r_drive_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        camera_back_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_front_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        docking_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        imu_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        laser_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        os_imu:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        os_lidar:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        os_sensor:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        shelf_bl_post:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_bottom_board:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_br_post:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_fl_post:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_fr_post:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_middle_board:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        shelf_top:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        shelf_top_board:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        tof_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -317,7 +527,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 4.086756229400635
+      Distance: 3.6390180587768555
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -332,10 +542,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 1.0547962188720703
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 4.713587284088135
+      Yaw: 4.723585605621338
     Saved: ~
 Window Geometry:
   Displays:
