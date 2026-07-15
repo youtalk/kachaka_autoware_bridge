@@ -18,6 +18,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_sidecars test/test_sidecars.py)
   ament_add_pytest_test(test_loop_map_gen test/test_loop_map_gen.py)
   ament_add_pytest_test(test_stitcher test/test_stitcher.py)
+  ament_add_pytest_test(test_transforms test/test_transforms.py)
 endif()
 
 ament_package()
