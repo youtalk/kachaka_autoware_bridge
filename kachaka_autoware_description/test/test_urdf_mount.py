@@ -63,7 +63,8 @@ def test_os_lidar_height_matches_bottom_mount():
         parent, xyz = joints[frame]
         # NOTE: sums local z only. Valid because every origin on the
         # base_link->os_lidar chain is pure-Z ("0 0 z") and the only rotation
-        # (the shelf's 180 deg yaw) is about Z, which preserves each z term.
+        # (the os_sensor->os_lidar 180 deg ICD yaw) is about Z, which preserves
+        # each z term.
         z += xyz[2]
         chain.append(frame)
         frame = parent
