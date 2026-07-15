@@ -18,12 +18,32 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include <autoware/point_types/types.hpp>
 #include <point_cloud_msg_wrapper/point_cloud_msg_wrapper.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 namespace kachaka_autoware_sensing {
+
+namespace {
+
+bool HasField(const sensor_msgs::msg::PointCloud2& in,
+              const std::string& name) {
+  for (const auto& field : in.fields) {
+    if (field.name == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+bool HasOusterFields(const sensor_msgs::msg::PointCloud2& in) {
+  return HasField(in, "x") && HasField(in, "y") && HasField(in, "z") &&
+         HasField(in, "intensity") && HasField(in, "ring");
+}
 
 sensor_msgs::msg::PointCloud2 ToPointXYZIRC(
     const sensor_msgs::msg::PointCloud2& in) {

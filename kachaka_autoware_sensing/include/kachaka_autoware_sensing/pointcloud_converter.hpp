@@ -19,6 +19,11 @@
 
 namespace kachaka_autoware_sensing {
 
+// Returns true iff `in` carries every field the converter reads: x, y, z,
+// intensity and ring. Callers should drop clouds that fail this check rather
+// than pass them to ToPointXYZIRC.
+bool HasOusterFields(const sensor_msgs::msg::PointCloud2& in);
+
 // Reformat a native Ouster OS-1 cloud (x, y, z, intensity float32; ring
 // uint16) into an Autoware PointXYZIRC cloud. The header (frame_id + stamp) is
 // preserved verbatim so downstream TF lookups still resolve. intensity is

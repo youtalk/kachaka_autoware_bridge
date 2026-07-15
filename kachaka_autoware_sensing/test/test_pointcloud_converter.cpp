@@ -140,3 +140,20 @@ TEST(PointcloudConverter, PreservesHeader) {
   EXPECT_EQ(out.header.stamp.sec, 123);
   EXPECT_EQ(out.header.stamp.nanosec, 456U);
 }
+
+TEST(HasOusterFields, TrueWhenAllPresent) {
+  EXPECT_TRUE(kachaka_autoware_sensing::HasOusterFields(MakeOusterCloud()));
+}
+
+TEST(HasOusterFields, FalseWhenRingMissing) {
+  sensor_msgs::msg::PointCloud2 cloud;
+  sensor_msgs::PointCloud2Modifier modifier(cloud);
+  modifier.setPointCloud2Fields(
+      4, "x", 1, sensor_msgs::msg::PointField::FLOAT32, "y", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "z", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "intensity", 1,
+      sensor_msgs::msg::PointField::FLOAT32);
+  modifier.resize(1);
+
+  EXPECT_FALSE(kachaka_autoware_sensing::HasOusterFields(cloud));
+}
