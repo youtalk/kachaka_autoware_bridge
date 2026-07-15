@@ -38,11 +38,16 @@
       <xacro:insert_block name="origin"/>
     </joint>
 
+    <!-- os_lidar is yawed 180 deg about Z relative to os_sensor per the Ouster ICD
+         (metadata lidar_to_sensor_transform = diag(-1,-1,1) + z). The point cloud data
+         is expressed in os_lidar, and the driver publishes this same static TF
+         (pub_static_tf:=true); this joint MUST match it (rpy 0 0 PI) or the two
+         os_sensor->os_lidar publishers disagree and the cloud renders 180 deg flipped. -->
     <link name="${name}_lidar"/>
     <joint name="${name}_lidar_joint" type="fixed">
       <parent link="${name}_sensor"/>
       <child link="${name}_lidar"/>
-      <origin xyz="0 0 ${lidar_to_sensor_z}" rpy="0 0 0"/>
+      <origin xyz="0 0 ${lidar_to_sensor_z}" rpy="0 0 ${PI}"/>
     </joint>
 
     <link name="${name}_imu"/>

@@ -4,10 +4,18 @@
        description="Ouster OS-1 hostname or IP. Override per robot (e.g. os-&lt;serial&gt;.local)."/>
   <arg name="metadata" default="/tmp/os1_metadata.json"
        description="Path to ouster metadata cache"/>
+  <arg name="timestamp_mode" default="TIME_FROM_ROS_TIME"
+       description="Point cloud header stamp source. TIME_FROM_ROS_TIME stamps clouds
+                    with host ROS time so they align with the map->base_link->os_lidar
+                    TF; the driver default (TIME_FROM_INTERNAL_OSC) uses the sensor's
+                    free-running clock, which is ~1.7e9 s off ROS time and makes RViz /
+                    NDT fail the os_lidar->map lookup ('Could not transform'). Use
+                    TIME_FROM_PTP_1588 instead once a PTP grandmaster syncs the sensor."/>
 
   <include file="$(find-pkg-share ouster_ros)/launch/sensor.launch.xml">
     <arg name="sensor_hostname" value="$(var sensor_hostname)"/>
     <arg name="metadata" value="$(var metadata)"/>
+    <arg name="timestamp_mode" value="$(var timestamp_mode)"/>
   </include>
 
   <node pkg="topic_tools" exec="relay" name="ouster_to_autoware_relay">
