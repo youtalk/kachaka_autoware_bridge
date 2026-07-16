@@ -18,7 +18,8 @@
     <arg name="timestamp_mode" value="$(var timestamp_mode)"/>
   </include>
 
-  <node pkg="topic_tools" exec="relay" name="ouster_to_autoware_relay">
+  <node pkg="kachaka_autoware_sensing" exec="pointcloud_converter"
+        name="ouster_to_autoware_converter">
     <param name="input_topic" value="/ouster/points"/>
     <param name="output_topic" value="/sensing/lidar/top/pointcloud_raw_ex"/>
   </node>
