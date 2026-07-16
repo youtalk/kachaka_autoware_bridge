@@ -13,7 +13,14 @@ endif()
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-ament_auto_add_library(${PROJECT_NAME} SHARED src/pointcloud_converter.cpp)
+ament_auto_add_library(
+  ${PROJECT_NAME}
+  SHARED
+  src/pointcloud_converter.cpp
+  src/ouster_converter_node.cpp)
+
+ament_auto_add_executable(pointcloud_converter src/main.cpp)
+target_link_libraries(pointcloud_converter ${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
