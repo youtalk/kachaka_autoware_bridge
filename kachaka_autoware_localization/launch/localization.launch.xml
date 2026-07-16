@@ -1,12 +1,22 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="config_file"
+  <!-- Use a launch-scoped-unique arg name, NOT the generic "config_file".
+       When this file is included by kachaka_autoware.launch.xml, a bare <include>
+       does not scope launch configurations, so a generic "config_file" set here
+       leaks to later sibling includes. autoware_vehicle_velocity_converter (via
+       autoware_core_sensing) and kachaka_autoware_vehicle_interface both declare
+       their own "config_file" arg; the leaked value shadowed their defaults, so
+       both nodes loaded this localization.param.yaml instead of their own config.
+       For the velocity converter that is fatal: it declares a statically-typed
+       "frame_id" parameter absent from localization.param.yaml and aborts on
+       startup. A unique arg name here keeps each node on its intended config. -->
+  <arg name="localization_param_file"
        default="$(find-pkg-share kachaka_autoware_localization)/config/localization.param.yaml"/>
 
   <node pkg="kachaka_autoware_localization"
         exec="kachaka_autoware_localization_node"
         name="kachaka_autoware_localization"
         output="screen">
-    <param from="$(var config_file)"/>
+    <param from="$(var localization_param_file)"/>
   </node>
 </launch>
