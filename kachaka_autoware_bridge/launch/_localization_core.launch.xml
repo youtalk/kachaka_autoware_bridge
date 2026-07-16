@@ -30,6 +30,13 @@
   <arg name="ekf_tf_topic" default="/localization/tf_unused"
        description="Where the EKF's unconditional map->base_link TF broadcast goes. Never /tf."/>
   <arg name="lidar_input_topic" default="/sensing/lidar/top/pointcloud_raw_ex"/>
+  <arg name="lidar_frame" default="os_lidar"
+       description="Sensor frame of the input cloud. The voxel-grid downsample filter
+                    keeps its output in this frame so ndt_scan_matcher can recover the
+                    sensor mount via TF. The upstream param file defaults these frames to
+                    the Autoware sample kit's velodyne_top, which does not exist in the
+                    Kachaka TF tree; leaving it unset makes the filter drop every cloud at
+                    the transform step."/>
   <arg name="vehicle_twist_input_topic" default="/sensing/vehicle_velocity_converter/twist_with_covariance"/>
   <arg name="gnss_input_topic" default="/sensing/gnss/pose_with_covariance"/>
   <arg name="pose_initializer_param_path"
@@ -56,6 +63,11 @@
       <node pkg="autoware_downsample_filters" exec="voxel_grid_downsample_filter_node"
             name="voxel_grid_downsample_filter_node">
         <param from="$(var voxel_grid_downsample_filter_param_file)"/>
+        <!-- Override the sample-kit velodyne_top frames (absent from the Kachaka TF
+             tree) with the real Ouster sensor frame; otherwise the filter drops every
+             cloud at the transform step. Applied after the file so it wins. -->
+        <param name="input_frame" value="$(var lidar_frame)"/>
+        <param name="output_frame" value="$(var lidar_frame)"/>
         <remap from="input" to="$(var lidar_input_topic)"/>
         <remap from="output" to="$(var ns)/util/downsample/pointcloud"/>
       </node>
