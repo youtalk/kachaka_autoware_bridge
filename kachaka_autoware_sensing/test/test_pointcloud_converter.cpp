@@ -115,7 +115,7 @@ TEST(PointcloudConverter, CopiesValuesAndClampsIntensity) {
   EXPECT_FLOAT_EQ(*it_y, 2.0F);
   EXPECT_FLOAT_EQ(*it_z, 3.0F);
   EXPECT_EQ(*it_intensity, 255U);  // clamped from 1000
-  EXPECT_EQ(*it_return, 0U);
+  EXPECT_EQ(*it_return, 1U);
   EXPECT_EQ(*it_channel, 7U);
 
   ++it_x;
@@ -129,13 +129,38 @@ TEST(PointcloudConverter, CopiesValuesAndClampsIntensity) {
   EXPECT_FLOAT_EQ(*it_y, 5.5F);
   EXPECT_FLOAT_EQ(*it_z, -6.0F);
   EXPECT_EQ(*it_intensity, 42U);
-  EXPECT_EQ(*it_return, 0U);
+  EXPECT_EQ(*it_return, 1U);
   EXPECT_EQ(*it_channel, 63U);
 }
 
 TEST(PointcloudConverter, PreservesHeader) {
   const auto out = kachaka_autoware_sensing::ToPointXYZIRC(MakeOusterCloud());
 
+  EXPECT_EQ(out.header.frame_id, "os_lidar");
+  EXPECT_EQ(out.header.stamp.sec, 123);
+  EXPECT_EQ(out.header.stamp.nanosec, 456U);
+}
+
+TEST(PointcloudConverter, HandlesEmptyCloud) {
+  sensor_msgs::msg::PointCloud2 cloud;
+  cloud.header.frame_id = "os_lidar";
+  cloud.header.stamp.sec = 123;
+  cloud.header.stamp.nanosec = 456U;
+
+  sensor_msgs::PointCloud2Modifier modifier(cloud);
+  modifier.setPointCloud2Fields(
+      5, "x", 1, sensor_msgs::msg::PointField::FLOAT32, "y", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "z", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "intensity", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "ring", 1,
+      sensor_msgs::msg::PointField::UINT16);
+  modifier.resize(0);
+
+  const auto out = kachaka_autoware_sensing::ToPointXYZIRC(cloud);
+
+  EXPECT_EQ(static_cast<std::size_t>(out.width) * out.height, 0U);
+  ASSERT_EQ(out.fields.size(), 6U);
+  EXPECT_EQ(out.point_step, 16U);
   EXPECT_EQ(out.header.frame_id, "os_lidar");
   EXPECT_EQ(out.header.stamp.sec, 123);
   EXPECT_EQ(out.header.stamp.nanosec, 456U);

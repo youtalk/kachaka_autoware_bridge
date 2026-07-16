@@ -29,9 +29,9 @@ bool HasOusterFields(const sensor_msgs::msg::PointCloud2& in);
 // preserved verbatim so downstream TF lookups still resolve. intensity is
 // clamped to [0, 255] (Ouster intensity is float32 and can exceed 255; NDT and
 // the ground filter ignore intensity for geometry, so clamping is lossless for
-// this use). return_type is set to 0 (single return); channel is copied from
-// ring. Output is unorganized (height 1). Precondition: the input carries the
-// x, y, z, intensity and ring fields.
+// this use). return_type is set to SINGLE_STRONGEST (single-return Ouster);
+// channel is copied from ring. Output is unorganized (height 1). Precondition:
+// the input carries the x, y, z, intensity and ring fields.
 sensor_msgs::msg::PointCloud2 ToPointXYZIRC(
     const sensor_msgs::msg::PointCloud2& in);
 

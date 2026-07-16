@@ -58,6 +58,12 @@ sensor_msgs::msg::PointCloud2 ToPointXYZIRC(
       static_cast<std::size_t>(in.width) * static_cast<std::size_t>(in.height);
   out_modifier.reserve(num_points);
 
+  if (in.width == 0 || in.height == 0) {
+    out.header = in.header;
+    out.is_dense = in.is_dense;
+    return out;
+  }
+
   sensor_msgs::PointCloud2ConstIterator<float> it_x(in, "x");
   sensor_msgs::PointCloud2ConstIterator<float> it_y(in, "y");
   sensor_msgs::PointCloud2ConstIterator<float> it_z(in, "z");
@@ -72,7 +78,7 @@ sensor_msgs::msg::PointCloud2 ToPointXYZIRC(
     point.z = *it_z;
     point.intensity = static_cast<std::uint8_t>(
         std::clamp<std::int64_t>(std::lround(*it_intensity), 0, 255));
-    point.return_type = 0U;
+    point.return_type = 1U;  // SINGLE_STRONGEST (single-return Ouster)
     point.channel = *it_ring;
     out_modifier.push_back(point);
   }
